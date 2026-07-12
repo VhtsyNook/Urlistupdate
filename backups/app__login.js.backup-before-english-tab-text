@@ -10,18 +10,37 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   StyleSheet,
   Text,
-  View,
+  View
 } from "react-native";
 
 import { auth, db } from "../src/config/firebase";
 import { COLORS } from "../src/constants/theme";
 
-const WEB_CLIENT_ID =
-  "1065859599553-khsmdvcc9l6ffo60n1i6od514o66c7f3.apps.googleusercontent.com";
+/*
+  สำคัญ:
+  ให้เอา Web client ID จาก Firebase / Google Cloud มาใส่ตรงนี้
+
+  วิธีหา:
+  Firebase Console
+  → Project settings
+  → General
+  → Your apps
+  → เลือก Android app: com.anonymous.mytodoapp
+  → ดาวน์โหลด google-services.json
+  → เปิดไฟล์ google-services.json
+  → หา client_type: 3
+  → copy client_id มาใส่ WEB_CLIENT_ID
+
+  หรือไปที่ Google Cloud Console
+  → APIs & Services
+  → Credentials
+  → OAuth 2.0 Client IDs
+  → Web client
+*/
+const WEB_CLIENT_ID = "1065859599553-khsmdvcc9l6ffo60n1i6od514o66c7f3.apps.googleusercontent.com";
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -34,7 +53,6 @@ export default function LoginScreen() {
       webClientId: WEB_CLIENT_ID,
       offlineAccess: true,
       forceCodeForRefreshToken: true,
-      scopes: ["openid", "profile", "email"],
     });
   }, []);
 
@@ -73,7 +91,7 @@ export default function LoginScreen() {
   };
 
   const handleGoogleSignIn = async () => {
-    if (!WEB_CLIENT_ID || WEB_CLIENT_ID === "PASTE_YOUR_WEB_CLIENT_ID_HERE") {
+    if (WEB_CLIENT_ID === "PASTE_YOUR_WEB_CLIENT_ID_HERE") {
       Alert.alert(
         "Google setup required",
         "กรุณาใส่ WEB_CLIENT_ID ใน app/login.js ก่อนใช้งาน Continue with Google"
@@ -88,27 +106,16 @@ export default function LoginScreen() {
         showPlayServicesUpdateDialog: true,
       });
 
-      try {
-        await GoogleSignin.signOut();
-      } catch (signOutError) {
-        console.log("Google signOut skip:", signOutError);
-      }
+      await GoogleSignin.signOut();
 
       const signInResult = await GoogleSignin.signIn();
 
-      let idToken =
+      const idToken =
         signInResult?.data?.idToken ||
         signInResult?.idToken ||
-        signInResult?.serverAuthCode ||
         null;
 
       if (!idToken) {
-        const tokens = await GoogleSignin.getTokens();
-        idToken = tokens?.idToken || null;
-      }
-
-      if (!idToken) {
-        console.log("Google Sign-In result:", JSON.stringify(signInResult));
         throw new Error("GOOGLE_ID_TOKEN_NOT_FOUND");
       }
 
@@ -128,7 +135,7 @@ export default function LoginScreen() {
       if (
         error?.code === "SIGN_IN_CANCELLED" ||
         error?.code === "12501" ||
-        String(error?.message || "").toLowerCase().includes("cancelled")
+        String(error?.message || "").includes("cancelled")
       ) {
         return;
       }
@@ -144,7 +151,7 @@ export default function LoginScreen() {
       if (error?.message === "GOOGLE_ID_TOKEN_NOT_FOUND") {
         Alert.alert(
           "Google Sign-In Error",
-          "ไม่พบ idToken จาก Google ให้ตรวจสอบว่า WEB_CLIENT_ID เป็น Web client ID และตั้งค่า SHA-1 ใน Firebase แล้ว"
+          "ไม่พบ idToken จาก Google กรุณาตรวจสอบ Web Client ID"
         );
         return;
       }
@@ -170,13 +177,16 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.card}>
-        <Image
-          source={require("../assets/images/Logover1.png")}
-          style={styles.logoImage}
-          resizeMode="contain"
-        />
+        <View style={styles.logoCircle}>
+          <Text style={styles.logoText}>✓</Text>
+        </View>
 
-        <Text style={styles.title}>Urlist</Text>
+        <Text style={styles.title}>Smart Task Scheduler</Text>
+
+        <Text style={styles.subtitle}>
+          Sign in to manage your tasks, calendar, study plans, and smart
+          scheduling.
+        </Text>
 
         <Pressable
           style={[styles.googleButton, isLoading && styles.disabledButton]}
@@ -191,10 +201,16 @@ export default function LoginScreen() {
                 <Text style={styles.googleIconText}>G</Text>
               </View>
 
-              <Text style={styles.googleButtonText}>Continue with Google</Text>
+              <Text style={styles.googleButtonText}>
+                Continue with Google
+              </Text>
             </>
           )}
         </Pressable>
+
+        <Text style={styles.noteText}>
+          Your tasks are saved securely under your Google account.
+        </Text>
       </View>
     </View>
   );
@@ -222,28 +238,42 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: COLORS.card,
     borderRadius: 28,
-    paddingVertical: 24,
-    paddingHorizontal: 26,
+    padding: 26,
     borderWidth: 1,
     borderColor: COLORS.border,
     alignItems: "center",
   },
-  logoImage: {
-    width: 150,
-    height: 150,
-    marginBottom: 6,
+  logoCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: COLORS.primaryDark,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+  },
+  logoText: {
+    color: COLORS.textLight,
+    fontSize: 34,
+    fontWeight: "900",
   },
   title: {
     fontSize: 30,
-    fontWeight: "900",
-    color: "#4F7DF3",
+    fontWeight: "bold",
+    color: COLORS.text,
     textAlign: "center",
-    marginBottom: 20,
-    letterSpacing: -0.3,
+  },
+  subtitle: {
+    marginTop: 12,
+    marginBottom: 30,
+    fontSize: 15,
+    color: COLORS.textMuted,
+    textAlign: "center",
+    lineHeight: 22,
   },
   googleButton: {
     width: "100%",
-    minHeight: 54,
+    minHeight: 56,
     borderRadius: 16,
     backgroundColor: COLORS.cardSoft,
     borderWidth: 1,
@@ -276,5 +306,12 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "800",
     color: COLORS.text,
+  },
+  noteText: {
+    marginTop: 18,
+    fontSize: 13,
+    color: COLORS.textMuted,
+    textAlign: "center",
+    lineHeight: 19,
   },
 });

@@ -1,0 +1,90 @@
+{
+  "project_info": {
+    "project_number": "1065859599553",
+    "project_id": "to-do-list-272d1",
+    "storage_bucket": "to-do-list-272d1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1065859599553:android:48149fc89983c16280d840",
+        "android_client_info": {
+          "package_name": "com.anonymous.mytodoapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1065859599553-js9l7af92a12a409dj5tstl32ob0t9pn.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.anonymous.mytodoapp",
+            "certificate_hash": "69fe20142084cbc16e50c6bfbc692f4e0fcf2876"
+          }
+        },
+        {
+          "client_id": "1065859599553-khsmdvcc9l6ffo60n1i6od514o66c7f3.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAeKipZMxYn9ROrYXz7LUGQIH2twkLFR2U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1065859599553-khsmdvcc9l6ffo60n1i6od514o66c7f3.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1065859599553-3lokr28q6lmn6gislsnu567g1b7i92h7.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "host.exp.Exponent"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1065859599553:android:05e5b607ac6ef2cb80d840",
+        "android_client_info": {
+          "package_name": "host.exp.exponent"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1065859599553-khsmdvcc9l6ffo60n1i6od514o66c7f3.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAeKipZMxYn9ROrYXz7LUGQIH2twkLFR2U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1065859599553-khsmdvcc9l6ffo60n1i6od514o66c7f3.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1065859599553-3lokr28q6lmn6gislsnu567g1b7i92h7.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "host.exp.Exponent"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

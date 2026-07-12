@@ -21,7 +21,7 @@ export const COLORS = {
   border: "#E5E5EA",
   divider: "#D1D1D6",
 
-  // Buttons
+  // Buttons๘ฮ
   buttonPrimary: "#0A84FF",
   buttonPrimaryPressed: "#0066CC",
   buttonSecondary: "#FFFFFF",

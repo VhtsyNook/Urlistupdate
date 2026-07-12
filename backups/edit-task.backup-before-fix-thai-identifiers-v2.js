@@ -1,5 +1,4 @@
-﻿import { Ionicons } from "@expo/vector-icons";
-import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
+﻿import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { useEffect, useState } from "react";
@@ -17,7 +16,6 @@ import {
 import TimePickerModal from "../src/components/TimePickerModal";
 import { auth } from "../src/config/firebase";
 import { COLORS } from "../src/constants/theme";
-import { useLanguage } from "../src/i18n/LanguageContext";
 import {
   getTaskById,
   rescheduleTask,
@@ -28,41 +26,9 @@ import {
   WEEKDAY_OPTIONS,
 } from "../src/utils/recurrence";
 
-function SectionCard({ title, icon, open, onToggle, children }) {
-  return (
-    <View style={styles.sectionCard}>
-      <Pressable style={styles.sectionHeader} onPress={onToggle}>
-        <View style={styles.sectionHeaderLeft}>
-          <View style={styles.sectionIconBox}>
-            <Ionicons name={icon} size={18} color={COLORS.primary} />
-          </View>
-
-          <Text style={styles.sectionCardTitle}>{title}</Text>
-        </View>
-
-        <Ionicons
-          name={open ? "chevron-up" : "chevron-down"}
-          size={18}
-          color={COLORS.textMuted}
-        />
-      </Pressable>
-
-      {open ? <View style={styles.sectionBody}>{children}</View> : null}
-    </View>
-  );
-}
-
-
-
-
 export default function EditTask() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const { language } = useLanguage();
-
-  const isThai = language === "th";
-  const locale = isThai ? "th-TH" : "en-US";
-  const text = (en, th) => (isThai ? th : en);
 
   const id = params?.id;
   const from = params?.from ? String(params.from) : "";
@@ -95,7 +61,6 @@ export default function EditTask() {
   const [endDateTime, setEndDateTime] = useState(
     new Date(Date.now() + 60 * 60 * 1000)
   );
-  const [isAllDay, setIsAllDay] = useState(false);
 
   const [repeatType, setRepeatType] = useState(RECURRENCE_TYPES.NONE);
   const [customDays, setCustomDays] = useState(1);
@@ -121,15 +86,6 @@ export default function EditTask() {
   const [timePickerVisible, setTimePickerVisible] = useState(false);
   const [timePickerTarget, setTimePickerTarget] = useState(null);
 
-  const [taskMode, setTaskMode] = useState("todo");
-
-  const [basicSectionOpen, setBasicSectionOpen] = useState(true);
-  const [scheduleSectionOpen, setScheduleSectionOpen] = useState(true);
-  const [timeSectionOpen, setTimeSectionOpen] = useState(true);
-
-  const [repeatDropdownOpen, setRepeatDropdownOpen] = useState(false);
-  const [durationDropdownOpen, setDurationDropdownOpen] = useState(false);
-
   const [conflictModalVisible, setConflictModalVisible] = useState(false);
   const [conflictResult, setConflictResult] = useState(null);
   const [pendingTaskPayload, setPendingTaskPayload] = useState(null);
@@ -138,48 +94,36 @@ export default function EditTask() {
   const [pendingEditPayload, setPendingEditPayload] = useState(null);
 
   const repeatOptions = [
-    {
-      label: text("Does not repeat", "ไม่ทำซ้ำ"),
-      value: RECURRENCE_TYPES.NONE,
-    },
-    {
-      label: text("Daily", "ทุกวัน"),
-      value: RECURRENCE_TYPES.DAILY,
-    },
-    {
-      label: text("Every N days", "ทุก N วัน"),
-      value: RECURRENCE_TYPES.CUSTOM_DAYS,
-    },
-    {
-      label: text("Weekly", "รายสัปดาห์"),
-      value: RECURRENCE_TYPES.WEEKLY,
-    },
-    {
-      label: text("Monthly", "รายเดือน"),
-      value: RECURRENCE_TYPES.MONTHLY,
-    },
+    { label: "Does not repeat", value: RECURRENCE_TYPES.NONE },
+    { label: "Daily", value: RECURRENCE_TYPES.DAILY },
+    { label: "Every N days", value: RECURRENCE_TYPES.CUSTOM_DAYS },
+    { label: "Weekly", value: RECURRENCE_TYPES.WEEKLY },
+    { label: "Monthly", value: RECURRENCE_TYPES.MONTHLY },
   ];
 
   const customDayOptions = Array.from({ length: 31 }, (_, index) => index + 1);
+
   const weekIntervalOptions = [1, 2, 3, 4, 5, 6, 8, 12];
+
   const monthDayOptions = Array.from({ length: 31 }, (_, index) => index + 1);
+
   const monthIntervalOptions = [1, 2, 3, 4, 6, 12];
 
   const priorityOptions = [
     {
-      label: text("Low", "ต่ำ"),
+      label: "Low",
       value: "Low",
-      description: "",
+      description: "Not urgent",
     },
     {
-      label: text("Medium", "ปานกลาง"),
+      label: "Medium",
       value: "Medium",
-      description: "",
+      description: "Normal task",
     },
     {
-      label: text("High", "สูง"),
+      label: "High",
       value: "High",
-      description: "",
+      description: "Important",
     },
   ];
 
@@ -257,52 +201,7 @@ export default function EditTask() {
     return normalizedEnd;
   };
 
-  const getAllDayRange = (dateValue) => {
-    const baseDate = normalizeDate(dateValue) || new Date();
-    const now = new Date();
-
-    const allDayStart = new Date(baseDate);
-    allDayStart.setHours(4, 0, 0, 0);
-
-    const allDayEnd = new Date(baseDate);
-    allDayEnd.setHours(23, 0, 0, 0);
-
-    const isToday =
-      baseDate.getFullYear() === now.getFullYear() &&
-      baseDate.getMonth() === now.getMonth() &&
-      baseDate.getDate() === now.getDate();
-
-    if (isToday) {
-      if (now >= allDayEnd) {
-        return {
-          safeStartTime: allDayEnd,
-          safeEndTime: allDayEnd,
-        };
-      }
-
-      if (now > allDayStart) {
-        const currentStart = new Date(now);
-        currentStart.setSeconds(0, 0);
-
-        return {
-          safeStartTime: currentStart,
-          safeEndTime: allDayEnd,
-        };
-      }
-    }
-
-    return {
-      safeStartTime: allDayStart,
-      safeEndTime: allDayEnd,
-    };
-  };
-
-
   const getSafeTaskTimeRange = () => {
-    if (isAllDay) {
-      return getAllDayRange(startDateTime);
-    }
-
     const safeStartTime = normalizeDate(startDateTime) || new Date();
     const safeEndTime = normalizeEndDateForStart(safeStartTime, endDateTime);
 
@@ -335,10 +234,7 @@ export default function EditTask() {
         setIsLoading(true);
 
         if (!id) {
-          Alert.alert(
-            text("Error", "เกิดข้อผิดพลาด"),
-            text("Task ID was not found.", "ไม่พบรหัสกิจกรรม")
-          );
+          Alert.alert("Error", "Task ID was not found.");
           handleBack();
           return;
         }
@@ -359,7 +255,6 @@ export default function EditTask() {
 
         setStartDateTime(start);
         setEndDateTime(end);
-        setIsAllDay(task.is_all_day === true);
 
         setPriority(task.priority || "Medium");
         setDeadlineDate(
@@ -368,11 +263,6 @@ export default function EditTask() {
           new Date(Date.now() + 24 * 60 * 60 * 1000)
         );
         setEstimatedDuration(task.estimated_duration_minutes || 60);
-        if (task.planning_enabled === true || task.task_type === "planned_task") {
-          setTaskMode("time");
-        } else {
-          setTaskMode("todo");
-        }
 
         setRepeatType(safeRepeatType);
 
@@ -427,21 +317,12 @@ export default function EditTask() {
         }
 
         if (error?.message === "PERMISSION_DENIED") {
-          Alert.alert(
-            text("Error", "เกิดข้อผิดพลาด"),
-            text(
-              "You do not have permission to edit this task.",
-              "คุณไม่มีสิทธิ์แก้ไขกิจกรรมนี้"
-            )
-          );
+          Alert.alert("Error", "You do not have permission to edit this task.");
           handleBack();
           return;
         }
 
-        Alert.alert(
-          text("Error", "เกิดข้อผิดพลาด"),
-          text("Unable to load this task.", "ไม่สามารถโหลดกิจกรรมนี้ได้")
-        );
+        Alert.alert("Error", "Unable to load this task.");
         handleBack();
       } finally {
         setIsLoading(false);
@@ -449,17 +330,11 @@ export default function EditTask() {
     };
 
     loadTask();
-  }, [id, isAuthReady, user, router, language]);
+  }, [id, isAuthReady, user, router]);
 
   const ensureLoggedIn = () => {
     if (!auth.currentUser) {
-      Alert.alert(
-        text("Login Required", "กรุณาเข้าสู่ระบบ"),
-        text(
-          "Please log in before using this feature.",
-          "กรุณาเข้าสู่ระบบก่อนใช้งานฟีเจอร์นี้"
-        )
-      );
+      Alert.alert("Login Required", "Please log in before using this feature.");
       router.replace("/login");
       return false;
     }
@@ -528,13 +403,7 @@ export default function EditTask() {
       newEndDateTime.setDate(selectedValue.getDate());
 
       if (newEndDateTime <= startDateTime) {
-        Alert.alert(
-          text("Error", "เกิดข้อผิดพลาด"),
-          text(
-            "End date and time must be later than start time.",
-            "วันและเวลาสิ้นสุดต้องมากกว่าวันและเวลาเริ่มต้น"
-          )
-        );
+        Alert.alert("Error", "End date and time must be later than start time.");
         return;
       }
 
@@ -614,7 +483,7 @@ export default function EditTask() {
 
     if (!isValidDate(date)) return "";
 
-    return date.toLocaleDateString(locale, {
+    return date.toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -630,20 +499,14 @@ export default function EditTask() {
   };
 
   const formatDuration = (minutes) => {
-    if (minutes < 60) {
-      return isThai ? `${minutes} นาที` : `${minutes} min`;
-    }
+    if (minutes < 60) return `${minutes} min`;
 
     const hours = Math.floor(minutes / 60);
     const remainingMinutes = minutes % 60;
 
-    if (remainingMinutes === 0) {
-      return isThai ? `${hours} ชม.` : `${hours} hr`;
-    }
+    if (remainingMinutes === 0) return `${hours} hr`;
 
-    return isThai
-      ? `${hours} ชม. ${remainingMinutes} นาที`
-      : `${hours} hr ${remainingMinutes} min`;
+    return `${hours} hr ${remainingMinutes} min`;
   };
 
   const formatConflictDate = (value) => {
@@ -651,7 +514,7 @@ export default function EditTask() {
 
     if (!isValidDate(date)) return "-";
 
-    return date.toLocaleDateString(locale, {
+    return date.toLocaleDateString("en-US", {
       day: "numeric",
       month: "short",
     });
@@ -703,35 +566,13 @@ export default function EditTask() {
   };
 
   const getWeekdayNames = () => {
-    const thaiWeekdays = [
-      "อาทิตย์",
-      "จันทร์",
-      "อังคาร",
-      "พุธ",
-      "พฤหัสบดี",
-      "ศุกร์",
-      "เสาร์",
-    ];
-
     return selectedWeekdays
-      .map((day) => {
-        if (isThai) return thaiWeekdays[day] || "";
-
-        return (
-          WEEKDAY_OPTIONS.find((option) => option.value === day)?.fullLabel ||
-          ""
-        );
-      })
+      .map(
+        (day) =>
+          WEEKDAY_OPTIONS.find((option) => option.value === day)?.fullLabel || ""
+      )
       .filter(Boolean)
       .join(", ");
-  };
-
-  const getWeekdayButtonLabel = (day) => {
-    const thaiWeekdaysShort = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
-
-    if (isThai) return thaiWeekdaysShort[day.value] || day.label;
-
-    return day.label;
   };
 
   const handleRepeatTypeChange = (nextType) => {
@@ -755,7 +596,6 @@ export default function EditTask() {
 
       start_time: safeStartTime,
       end_time: safeEndTime,
-      is_all_day: isAllDay,
 
       task_type: "fixed",
 
@@ -817,13 +657,7 @@ export default function EditTask() {
           return;
         }
 
-        Alert.alert(
-          text("Error", "เกิดข้อผิดพลาด"),
-          text(
-            "Unable to reschedule this task. Please try again.",
-            "ไม่สามารถเลื่อนเวลากิจกรรมนี้ได้ กรุณาลองใหม่อีกครั้ง"
-          )
-        );
+        Alert.alert("Error", "Unable to reschedule this task. Please try again.");
         return;
       }
 
@@ -844,13 +678,7 @@ export default function EditTask() {
         return;
       }
 
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Unable to update this task. Please try again.",
-          "ไม่สามารถอัปเดตกิจกรรมนี้ได้ กรุณาลองใหม่อีกครั้ง"
-        )
-      );
+      Alert.alert("Error", "Unable to update this task. Please try again.");
     } catch (error) {
       console.error(
         isRescheduleMode ? "Reschedule task error:" : "Update task error:",
@@ -863,19 +691,15 @@ export default function EditTask() {
       }
 
       if (error?.message === "PERMISSION_DENIED") {
-        Alert.alert(
-          text("Error", "เกิดข้อผิดพลาด"),
-          text(
-            "You do not have permission to edit this task.",
-            "คุณไม่มีสิทธิ์แก้ไขกิจกรรมนี้"
-          )
-        );
+        Alert.alert("Error", "You do not have permission to edit this task.");
         return;
       }
 
       Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        getReadableUpdateErrorMessage(error)
+        "Error",
+        isRescheduleMode
+          ? "Unable to reschedule this task. Please try again."
+          : "Unable to update this task. Please try again."
       );
     } finally {
       setIsSaving(false);
@@ -911,13 +735,7 @@ export default function EditTask() {
         return;
       }
 
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Unable to save changes. Please try again.",
-          "ไม่สามารถบันทึกการแก้ไขได้ กรุณาลองใหม่อีกครั้ง"
-        )
-      );
+      Alert.alert("Error", "Unable to save changes. Please try again.");
     } catch (error) {
       console.error("Save anyway edit error:", error);
 
@@ -927,20 +745,11 @@ export default function EditTask() {
       }
 
       if (error?.message === "PERMISSION_DENIED") {
-        Alert.alert(
-          text("Error", "เกิดข้อผิดพลาด"),
-          text(
-            "You do not have permission to edit this task.",
-            "คุณไม่มีสิทธิ์แก้ไขกิจกรรมนี้"
-          )
-        );
+        Alert.alert("Error", "You do not have permission to edit this task.");
         return;
       }
 
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        getReadableUpdateErrorMessage(error)
-      );
+      Alert.alert("Error", "Unable to save changes. Please try again.");
     } finally {
       setIsSaving(false);
     }
@@ -951,31 +760,19 @@ export default function EditTask() {
     if (isSaving) return;
 
     if (!id) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text("Task ID was not found.", "ไม่พบรหัสกิจกรรม")
-      );
+      Alert.alert("Error", "Task ID was not found.");
       return;
     }
 
     if (!title.trim()) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text("Please enter a title.", "กรุณากรอกชื่อกิจกรรม")
-      );
+      Alert.alert("Error", "Please enter a title.");
       return;
     }
 
     const { safeStartTime, safeEndTime } = getSafeTaskTimeRange();
 
     if (safeEndTime <= safeStartTime) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "End time must be later than start time.",
-          "เวลาสิ้นสุดต้องมากกว่าเวลาเริ่มต้น"
-        )
-      );
+      Alert.alert("Error", "End time must be later than start time.");
       return;
     }
 
@@ -984,11 +781,8 @@ export default function EditTask() {
       (!customDays || Number(customDays) < 1 || Number(customDays) > 100)
     ) {
       Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Custom repeat interval must be between 1 and 100 days.",
-          "จำนวนวันที่ทำซ้ำต้องอยู่ระหว่าง 1 ถึง 100 วัน"
-        )
+        "Error",
+        "Custom repeat interval must be between 1 and 100 days."
       );
       return;
     }
@@ -997,13 +791,7 @@ export default function EditTask() {
       repeatType === RECURRENCE_TYPES.WEEKLY &&
       (!selectedWeekdays || selectedWeekdays.length === 0)
     ) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Please select at least one weekday.",
-          "กรุณาเลือกวันอย่างน้อย 1 วัน"
-        )
-      );
+      Alert.alert("Error", "Please select at least one weekday.");
       return;
     }
 
@@ -1011,13 +799,7 @@ export default function EditTask() {
       repeatType === RECURRENCE_TYPES.WEEKLY &&
       (!weekInterval || Number(weekInterval) < 1 || Number(weekInterval) > 12)
     ) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Week interval must be between 1 and 12 weeks.",
-          "จำนวนสัปดาห์ที่ทำซ้ำต้องอยู่ระหว่าง 1 ถึง 12 สัปดาห์"
-        )
-      );
+      Alert.alert("Error", "Week interval must be between 1 and 12 weeks.");
       return;
     }
 
@@ -1025,13 +807,7 @@ export default function EditTask() {
       repeatType === RECURRENCE_TYPES.MONTHLY &&
       (!monthDay || Number(monthDay) < 1 || Number(monthDay) > 31)
     ) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Month day must be between 1 and 31.",
-          "วันที่ของเดือนต้องอยู่ระหว่าง 1 ถึง 31"
-        )
-      );
+      Alert.alert("Error", "Month day must be between 1 and 31.");
       return;
     }
 
@@ -1039,32 +815,17 @@ export default function EditTask() {
       repeatType === RECURRENCE_TYPES.MONTHLY &&
       (!monthInterval || Number(monthInterval) < 1 || Number(monthInterval) > 12)
     ) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Month interval must be between 1 and 12 months.",
-          "จำนวนเดือนที่ทำซ้ำต้องอยู่ระหว่าง 1 ถึง 12 เดือน"
-        )
-      );
+      Alert.alert("Error", "Month interval must be between 1 and 12 months.");
       return;
     }
 
     if (!priority) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text("Please select a priority.", "กรุณาเลือกระดับความสำคัญ")
-      );
+      Alert.alert("Error", "Please select a priority.");
       return;
     }
 
     if (!estimatedDuration || Number(estimatedDuration) <= 0) {
-      Alert.alert(
-        text("Error", "เกิดข้อผิดพลาด"),
-        text(
-          "Please select estimated duration.",
-          "กรุณาเลือกระยะเวลาที่คาดว่าจะใช้"
-        )
-      );
+      Alert.alert("Error", "Please select estimated duration.");
       return;
     }
 
@@ -1111,91 +872,10 @@ export default function EditTask() {
   const remainingConflictCount =
     conflictItems.length > 5 ? conflictItems.length - 5 : 0;
 
-  const getConflictMessage = () => {
-    const count = conflictResult?.conflict_count || 0;
-    const slotCount = conflictResult?.conflict_instance_count || 0;
-
-    if (isThai) {
-      if (slotCount) {
-        return `พบกิจกรรมที่เวลาทับซ้อน ${count} กิจกรรม จากช่วงเวลาใหม่ ${slotCount} ช่วง`;
-      }
-
-      return `พบกิจกรรมที่เวลาทับซ้อน ${count} กิจกรรม`;
-    }
-
-    return `Found ${count} conflicting task${count > 1 ? "s" : ""}${slotCount
-      ? ` from ${slotCount} time slot${slotCount > 1 ? "s" : ""}`
-      : ""
-      }.`;
-  };
-  const getReadableUpdateErrorMessage = (error) => {
-    if (error?.message === "INVALID_ALL_DAY_TIME_RANGE") {
-      return text(
-        "The selected day has already passed the all-day time range. Please choose another date.",
-        "วันนี้เลยช่วงเวลาทั้งวันแล้ว กรุณาเลือกวันอื่น"
-      );
-    }
-
-    if (isRescheduleMode) {
-      return text(
-        "Unable to reschedule this task. Please try again.",
-        "ไม่สามารถเลื่อนเวลากิจกรรมนี้ได้ กรุณาลองใหม่อีกครั้ง"
-      );
-    }
-
-    return text(
-      "Unable to update this task. Please try again.",
-      "ไม่สามารถอัปเดตกิจกรรมนี้ได้ กรุณาลองใหม่อีกครั้ง"
-    );
-  };
-  const getSaveButtonLabel = () => {
-    if (isSaving) {
-      return isRescheduleMode
-        ? text("Rescheduling...", "กำลังเลื่อนเวลา...")
-        : text("Checking...", "กำลังตรวจสอบ...");
-    }
-
-    return isRescheduleMode
-      ? text("Save New Time", "บันทึกเวลาใหม่")
-      : text("Save Changes", "บันทึกการแก้ไข");
-  };
-
-  const getDurationDescription = () => {
-    return "ใช้สำหรับบอกระบบว่ากิจกรรมนี้ต้องใช้เวลาประมาณเท่าไร เพื่อช่วยคำนวณเวลาว่าง แนะนำช่วงเวลาทำกิจกรรม และช่วยจัดเวลาใหม่เมื่อกิจกรรมเลยเวลา";
-  };
-
-  const getRepeatDescription = (type) => {
-    if (type === RECURRENCE_TYPES.NONE) {
-      return "กิจกรรมนี้จะถูกสร้างเพียงครั้งเดียว ไม่สร้างกิจกรรมซ้ำในวันถัดไป";
-    }
-
-    if (type === RECURRENCE_TYPES.DAILY) {
-      return "กิจกรรมนี้จะถูกสร้างซ้ำทุกวันในเวลาเริ่มต้นและเวลาสิ้นสุดเดิม";
-    }
-
-    if (type === RECURRENCE_TYPES.CUSTOM_DAYS) {
-      return "กำหนดจำนวนวันเอง เช่น ทุก 3 วัน หมายถึงระบบจะสร้างกิจกรรมซ้ำทุก ๆ 3 วัน";
-    }
-
-    if (type === RECURRENCE_TYPES.WEEKLY) {
-      return "กำหนดให้กิจกรรมทำซ้ำเป็นรายสัปดาห์ และเลือกวันในสัปดาห์ได้ เช่น ทุกวันศุกร์ หรือทุกวันเสาร์";
-    }
-
-    if (type === RECURRENCE_TYPES.MONTHLY) {
-      return "กำหนดให้กิจกรรมทำซ้ำเป็นรายเดือน โดยเลือกวันที่ของเดือนและจำนวนเดือนที่ต้องการเว้นได้ เช่น ทุกวันที่ 1 หรือทุก 2 เดือน";
-    }
-
-    return "ใช้สำหรับกำหนดรูปแบบการทำซ้ำของกิจกรรม";
-  };
-
-
-
   if (isLoading || !isAuthReady) {
     return (
       <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>
-          {text("Loading task...", "กำลังโหลดกิจกรรม...")}
-        </Text>
+        <Text style={styles.loadingText}>Loading task...</Text>
       </View>
     );
   }
@@ -1203,9 +883,7 @@ export default function EditTask() {
   if (!user) {
     return (
       <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>
-          {text("Redirecting to login...", "กำลังไปยังหน้าเข้าสู่ระบบ...")}
-        </Text>
+        <Text style={styles.loadingText}>Redirecting to login...</Text>
       </View>
     );
   }
@@ -1216,8 +894,6 @@ export default function EditTask() {
         style={styles.container}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="none"
       >
         <View style={styles.topNav}>
           <Pressable style={styles.navIconButton} onPress={handleBack}>
@@ -1225,9 +901,7 @@ export default function EditTask() {
           </Pressable>
 
           <Text style={styles.navTitle}>
-            {isRescheduleMode
-              ? text("Reschedule Task", "เลื่อนเวลากิจกรรม")
-              : text("Edit Task", "แก้ไขกิจกรรม")}
+            {isRescheduleMode ? "Reschedule Task" : "Edit Task"}
           </Text>
 
           <Pressable
@@ -1235,151 +909,94 @@ export default function EditTask() {
             onPress={handleUpdate}
             disabled={isSaving}
           >
-            <Text style={styles.doneButtonText}>✓</Text>
+            <Text style={styles.doneButtonText}>Save</Text>
           </Pressable>
         </View>
 
         {!isRescheduleMode ? (
+          <View style={styles.card}>
+            <TextInput
+              style={styles.titleInput}
+              placeholder="Title"
+              placeholderTextColor={COLORS.textMuted}
+              value={title}
+              onChangeText={setTitle}
+              numberOfLines={1}
+            />
+
+            <View style={styles.line} />
+
+            <TextInput
+              style={styles.detailInput}
+              placeholder="Detail / Note"
+              placeholderTextColor={COLORS.textMuted}
+              value={detail}
+              onChangeText={setDetail}
+              multiline
+              textAlignVertical="top"
+            />
+          </View>
+        ) : (
+          <View style={styles.card}>
+            <Text style={styles.rescheduleTitle} numberOfLines={2}>
+              {title || "Untitled Task"}
+            </Text>
+
+            {detail ? (
+              <>
+                <View style={styles.line} />
+                <Text style={styles.rescheduleDetail}>{detail}</Text>
+              </>
+            ) : null}
+          </View>
+        )}
+
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <Text style={styles.label}>Start</Text>
+
+            <Pressable
+              style={styles.pickerBox}
+              onPress={() => openPicker("start", "date")}
+            >
+              <Text style={styles.pickerText}>{formatDate(startDateTime)}</Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.timeBox}
+              onPress={() => openPicker("start", "time")}
+            >
+              <Text style={styles.pickerText}>{formatTime(startDateTime)}</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.line} />
+
+          <View style={styles.row}>
+            <Text style={styles.label}>End</Text>
+
+            <Pressable
+              style={styles.pickerBox}
+              onPress={() => openPicker("end", "date")}
+            >
+              <Text style={styles.pickerText}>{formatDate(endDateTime)}</Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.timeBox}
+              onPress={() => openPicker("end", "time")}
+            >
+              <Text style={styles.pickerText}>{formatTime(endDateTime)}</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {!isRescheduleMode ? (
           <>
-            <SectionCard
-              title="ข้อมูลพื้นฐาน"
-              icon="document-text-outline"
-              open={basicSectionOpen}
-              onToggle={() => setBasicSectionOpen((current) => !current)}
-            >
-              <TextInput
-                style={styles.compactTitleInput}
-                placeholder={text("Title", "ชื่อกิจกรรม")}
-                placeholderTextColor={COLORS.textMuted}
-                value={title}
-                onChangeText={setTitle}
-                numberOfLines={1}
-              />
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Time Management</Text>
 
-              <View style={styles.line} />
-
-              <TextInput
-                style={styles.compactDetailInput}
-                placeholder={text("Detail / Note", "รายละเอียด / หมายเหตุ")}
-                placeholderTextColor={COLORS.textMuted}
-                value={detail}
-                onChangeText={setDetail}
-                multiline
-                textAlignVertical="top"
-              />
-            </SectionCard>
-
-            <SectionCard
-              title="ตารางเวลา"
-              icon="time-outline"
-              open={scheduleSectionOpen}
-              onToggle={() => setScheduleSectionOpen((current) => !current)}
-            >
-              <View style={styles.allDayRow}>
-                <View style={styles.allDayTextBox}>
-                  <Text style={styles.allDayTitle}>{text("All day", "ทั้งวัน")}</Text>
-
-                </View>
-
-                <Pressable
-                  style={[
-                    styles.allDayToggle,
-                    isAllDay && styles.allDayToggleActive,
-                  ]}
-                  onPress={() => setIsAllDay((current) => !current)}
-                >
-                  <View
-                    style={[
-                      styles.allDayToggleKnob,
-                      isAllDay && styles.allDayToggleKnobActive,
-                    ]}
-                  />
-                </Pressable>
-              </View>
-
-              <View style={styles.line} />
-
-              <View style={styles.row}>
-                <Text style={styles.label}>{text("Start", "เริ่ม")}</Text>
-
-                <Pressable
-                  style={styles.pickerBox}
-                  onPress={() => openPicker("start", "date")}
-                >
-                  <Text style={styles.pickerText}>{formatDate(startDateTime)}</Text>
-                </Pressable>
-
-                {!isAllDay ? (
-                  <Pressable
-                    style={styles.timeBox}
-                    onPress={() => openPicker("start", "time")}
-                  >
-                    <Text style={styles.pickerText}>{formatTime(startDateTime)}</Text>
-                  </Pressable>
-                ) : (
-                  <View style={styles.timeBoxDisabled}>
-                    <Text style={styles.disabledTimeText}>
-                      {formatTime(getSafeTaskTimeRange().safeStartTime)}
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.line} />
-
-              {!isAllDay ? (
-                <View style={styles.row}>
-                  <Text style={styles.label}>{text("End", "สิ้นสุด")}</Text>
-
-                  <Pressable
-                    style={styles.pickerBox}
-                    onPress={() => openPicker("end", "date")}
-                  >
-                    <Text style={styles.pickerText}>{formatDate(endDateTime)}</Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={styles.timeBox}
-                    onPress={() => openPicker("end", "time")}
-                  >
-                    <Text style={styles.pickerText}>{formatTime(endDateTime)}</Text>
-                  </Pressable>
-                </View>
-              ) : (
-                <View style={styles.allDayInfoBox}>
-                  <Ionicons name="time-outline" size={16} color={COLORS.primary} />
-                  <Text style={styles.allDayInfoText}>
-                    {text(
-                      "This task will cover the selected day from 04:00 to 23:00.",
-                      "กิจกรรมนี้จะครอบคลุมช่วงเวลาของวันนั้น เช่น 04:00 ถึง 23:00"
-                    )}
-                  </Text>
-                </View>
-              )}
-
-              <View style={styles.line} />
-
-              <View style={styles.row}>
-                <Text style={styles.label}>{text("Deadline", "กำหนดส่ง")}</Text>
-
-                <Pressable
-                  style={styles.deadlineBox}
-                  onPress={() => openPicker("deadline", "date")}
-                >
-                  <Text style={styles.pickerText}>{formatDate(deadlineDate)}</Text>
-                </Pressable>
-              </View>
-            </SectionCard>
-
-            <SectionCard
-              title="การจัดเวลา"
-              icon="calendar-outline"
-              open={timeSectionOpen}
-              onToggle={() => setTimeSectionOpen((current) => !current)}
-            >
-              <Text style={styles.subSectionTitle}>
-                {text("Priority", "ความสำคัญ")}
-              </Text>
+              <Text style={styles.subSectionTitle}>Priority</Text>
 
               <View style={styles.priorityContainer}>
                 {priorityOptions.map((option) => {
@@ -1392,11 +1009,15 @@ export default function EditTask() {
                         styles.priorityButton,
                         getPriorityChipStyle(option.value),
                         active && styles.priorityButtonActive,
-                        active && option.value === "Low" && styles.priorityLowActive,
+                        active &&
+                        option.value === "Low" &&
+                        styles.priorityLowActive,
                         active &&
                         option.value === "Medium" &&
                         styles.priorityMediumActive,
-                        active && option.value === "High" && styles.priorityHighActive,
+                        active &&
+                        option.value === "High" &&
+                        styles.priorityHighActive,
                       ]}
                       onPress={() => setPriority(option.value)}
                     >
@@ -1409,10 +1030,18 @@ export default function EditTask() {
                               : getPriorityTextColor(option.value),
                           },
                         ]}
-                        numberOfLines={1}
                       >
-                        {active ? "✓ " : ""}
+                        {active ? "Selected " : ""}
                         {option.label}
+                      </Text>
+
+                      <Text
+                        style={[
+                          styles.priorityDescription,
+                          active && styles.priorityDescriptionActive,
+                        ]}
+                      >
+                        {option.description}
                       </Text>
                     </Pressable>
                   );
@@ -1421,150 +1050,103 @@ export default function EditTask() {
 
               <View style={styles.line} />
 
-              <View style={styles.labelWithInfo}>
-                <Text style={styles.subSectionTitleNoMargin}>
-                  ระยะเวลาที่คาดว่าจะใช้
-                </Text>
+              <View style={styles.row}>
+                <Text style={styles.label}>Deadline</Text>
 
                 <Pressable
-                  style={styles.infoButton}
-                  onPress={() =>
-                    Alert.alert("ระยะเวลาที่คาดว่าจะใช้", getDurationDescription())
-                  }
+                  style={styles.deadlineBox}
+                  onPress={() => openPicker("deadline", "date")}
                 >
-                  <Ionicons
-                    name="information-circle-outline"
-                    size={18}
-                    color={COLORS.textMuted}
-                  />
+                  <Text style={styles.pickerText}>
+                    {formatDate(deadlineDate)}
+                  </Text>
                 </Pressable>
               </View>
 
-              <Pressable
-                style={styles.dropdownButton}
-                onPress={() => setDurationDropdownOpen((current) => !current)}
-              >
-                <Text style={styles.dropdownButtonText}>
-                  {formatDuration(estimatedDuration)}
-                </Text>
-
-                <Ionicons
-                  name={durationDropdownOpen ? "chevron-up" : "chevron-down"}
-                  size={18}
-                  color={COLORS.textMuted}
-                />
-              </Pressable>
-
-              {durationDropdownOpen ? (
-                <View style={styles.dropdownMenu}>
-                  {durationOptions.map((duration) => (
-                    <Pressable
-                      key={duration}
-                      style={[
-                        styles.dropdownItem,
-                        estimatedDuration === duration && styles.dropdownItemActive,
-                      ]}
-                      onPress={() => {
-                        setEstimatedDuration(duration);
-                        setDurationDropdownOpen(false);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.dropdownItemText,
-                          estimatedDuration === duration &&
-                          styles.dropdownItemTextActive,
-                        ]}
-                      >
-                        {formatDuration(duration)}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              ) : null}
-
               <View style={styles.line} />
 
-              <Text style={styles.subSectionTitle}>การทำซ้ำ</Text>
+              <Text style={styles.subSectionTitle}>Estimated Duration</Text>
+
+              <View style={styles.durationContainer}>
+                {durationOptions.map((duration) => (
+                  <Pressable
+                    key={duration}
+                    style={[
+                      styles.durationButton,
+                      estimatedDuration === duration &&
+                      styles.durationButtonActive,
+                    ]}
+                    onPress={() => setEstimatedDuration(duration)}
+                  >
+                    <Text
+                      style={[
+                        styles.durationText,
+                        estimatedDuration === duration &&
+                        styles.durationTextActive,
+                      ]}
+                    >
+                      {formatDuration(duration)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.helpText}>
+                These values help the system recommend suitable tasks for
+                available free time.
+              </Text>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Repeat</Text>
 
               {recurrenceGroupId ? (
                 <Text style={styles.repeatNoticeText}>
-                  กิจกรรมนี้เป็นส่วนหนึ่งของกลุ่มกิจกรรมที่ทำซ้ำ คุณจะเลือกวิธีใช้การแก้ไขตอนบันทึก
+                  This task is part of a recurring task group. You will choose
+                  how to apply changes when saving.
                 </Text>
               ) : null}
 
-              <Pressable
-                style={styles.dropdownButton}
-                onPress={() => setRepeatDropdownOpen((current) => !current)}
-              >
-                <Text style={styles.dropdownButtonText}>
-                  {repeatOptions.find((option) => option.value === repeatType)?.label ||
-                    "ไม่ทำซ้ำ"}
+              <View style={styles.repeatContainer}>
+                {repeatOptions.map((option) => (
+                  <Pressable
+                    key={option.value}
+                    style={[
+                      styles.repeatButton,
+                      repeatType === option.value && styles.repeatButtonActive,
+                    ]}
+                    onPress={() => handleRepeatTypeChange(option.value)}
+                  >
+                    <Text
+                      style={[
+                        styles.repeatText,
+                        repeatType === option.value && styles.repeatTextActive,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {repeatType === RECURRENCE_TYPES.NONE && (
+                <Text style={styles.helpText}>
+                  This task will be created only once.
                 </Text>
+              )}
 
-                <Ionicons
-                  name={repeatDropdownOpen ? "chevron-up" : "chevron-down"}
-                  size={18}
-                  color={COLORS.textMuted}
-                />
-              </Pressable>
+              {repeatType === RECURRENCE_TYPES.DAILY && (
+                <Text style={styles.helpText}>
+                  This task will repeat every day at the same time.
+                </Text>
+              )}
 
-              {repeatDropdownOpen ? (
-                <View style={styles.dropdownMenu}>
-                  {repeatOptions.map((option) => {
-                    const active = repeatType === option.value;
-                    const hasExtraOptions =
-                      option.value === RECURRENCE_TYPES.CUSTOM_DAYS ||
-                      option.value === RECURRENCE_TYPES.WEEKLY ||
-                      option.value === RECURRENCE_TYPES.MONTHLY;
-
-                    return (
-                      <View
-                        key={option.value}
-                        style={[
-                          styles.dropdownItemRow,
-                          active && styles.dropdownItemActive,
-                        ]}
-                      >
-                        <Pressable
-                          style={styles.dropdownItemMain}
-                          onPress={() => {
-                            handleRepeatTypeChange(option.value);
-                            setRepeatDropdownOpen(hasExtraOptions);
-                          }}
-                        >
-                          <Text
-                            style={[
-                              styles.dropdownItemText,
-                              active && styles.dropdownItemTextActive,
-                            ]}
-                          >
-                            {option.label}
-                          </Text>
-                        </Pressable>
-
-                        <Pressable
-                          style={styles.dropdownInfoButton}
-                          onPress={() =>
-                            Alert.alert(option.label, getRepeatDescription(option.value))
-                          }
-                        >
-                          <Ionicons
-                            name="information-circle-outline"
-                            size={18}
-                            color={active ? COLORS.textLight : COLORS.textMuted}
-                          />
-                        </Pressable>
-                      </View>
-                    );
-                  })}
-                </View>
-              ) : null}
-
-              {repeatDropdownOpen && repeatType === RECURRENCE_TYPES.CUSTOM_DAYS && (
+              {repeatType === RECURRENCE_TYPES.CUSTOM_DAYS && (
                 <>
+                  <View style={styles.line} />
+
                   <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>ทำซ้ำทุก</Text>
+                    <Text style={styles.smallLabel}>Repeat every</Text>
 
                     <TextInput
                       style={styles.numberInput}
@@ -1576,7 +1158,7 @@ export default function EditTask() {
                       maxLength={3}
                     />
 
-                    <Text style={styles.smallLabel}>วัน</Text>
+                    <Text style={styles.smallLabel}>day(s)</Text>
                   </View>
 
                   <View style={styles.customDayContainer}>
@@ -1585,14 +1167,16 @@ export default function EditTask() {
                         key={day}
                         style={[
                           styles.dayButton,
-                          Number(customDays) === day && styles.dayButtonActive,
+                          Number(customDays) === day &&
+                          styles.dayButtonActive,
                         ]}
                         onPress={() => setCustomDays(day)}
                       >
                         <Text
                           style={[
                             styles.dayButtonText,
-                            Number(customDays) === day && styles.dayButtonTextActive,
+                            Number(customDays) === day &&
+                            styles.dayButtonTextActive,
                           ]}
                         >
                           {day}
@@ -1600,19 +1184,29 @@ export default function EditTask() {
                       </Pressable>
                     ))}
                   </View>
+
+                  <Text style={styles.helpText}>
+                    For example, 3 means the task repeats every 3 days.
+                  </Text>
                 </>
               )}
 
-              {repeatDropdownOpen && repeatType === RECURRENCE_TYPES.WEEKLY && (
+              {repeatType === RECURRENCE_TYPES.WEEKLY && (
                 <>
+                  <View style={styles.line} />
+
                   <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>ทำซ้ำทุก</Text>
+                    <Text style={styles.smallLabel}>Repeat every</Text>
 
                     <TextInput
                       style={styles.numberInput}
                       value={String(weekInterval)}
                       onChangeText={(value) =>
-                        handlePositiveNumberChange(value, setWeekInterval, 12)
+                        handlePositiveNumberChange(
+                          value,
+                          setWeekInterval,
+                          12
+                        )
                       }
                       keyboardType="number-pad"
                       placeholder="1"
@@ -1620,7 +1214,7 @@ export default function EditTask() {
                       maxLength={2}
                     />
 
-                    <Text style={styles.smallLabel}>สัปดาห์</Text>
+                    <Text style={styles.smallLabel}>week(s)</Text>
                   </View>
 
                   <View style={styles.customDayContainer}>
@@ -1629,7 +1223,8 @@ export default function EditTask() {
                         key={week}
                         style={[
                           styles.dayButton,
-                          Number(weekInterval) === week && styles.dayButtonActive,
+                          Number(weekInterval) === week &&
+                          styles.dayButtonActive,
                         ]}
                         onPress={() => setWeekInterval(week)}
                       >
@@ -1646,7 +1241,7 @@ export default function EditTask() {
                     ))}
                   </View>
 
-                  <Text style={styles.subSectionTitle}>ทำซ้ำในวัน</Text>
+                  <Text style={styles.subSectionTitle}>Repeat on</Text>
 
                   <View style={styles.weekdayContainer}>
                     {WEEKDAY_OPTIONS.map((day) => {
@@ -1667,25 +1262,36 @@ export default function EditTask() {
                               active && styles.weekdayTextActive,
                             ]}
                           >
-                            {getWeekdayButtonLabel(day)}
+                            {day.label}
                           </Text>
                         </Pressable>
                       );
                     })}
                   </View>
+
+                  <Text style={styles.helpText}>
+                    This task will repeat every {weekInterval || 1} week(s) on{" "}
+                    {getWeekdayNames()}.
+                  </Text>
                 </>
               )}
 
-              {repeatDropdownOpen && repeatType === RECURRENCE_TYPES.MONTHLY && (
+              {repeatType === RECURRENCE_TYPES.MONTHLY && (
                 <>
+                  <View style={styles.line} />
+
                   <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>ทำซ้ำทุก</Text>
+                    <Text style={styles.smallLabel}>Repeat every</Text>
 
                     <TextInput
                       style={styles.numberInput}
                       value={String(monthInterval)}
                       onChangeText={(value) =>
-                        handlePositiveNumberChange(value, setMonthInterval, 12)
+                        handlePositiveNumberChange(
+                          value,
+                          setMonthInterval,
+                          12
+                        )
                       }
                       keyboardType="number-pad"
                       placeholder="1"
@@ -1693,7 +1299,7 @@ export default function EditTask() {
                       maxLength={2}
                     />
 
-                    <Text style={styles.smallLabel}>เดือน</Text>
+                    <Text style={styles.smallLabel}>month(s)</Text>
                   </View>
 
                   <View style={styles.customDayContainer}>
@@ -1702,7 +1308,8 @@ export default function EditTask() {
                         key={month}
                         style={[
                           styles.dayButton,
-                          Number(monthInterval) === month && styles.dayButtonActive,
+                          Number(monthInterval) === month &&
+                          styles.dayButtonActive,
                         ]}
                         onPress={() => setMonthInterval(month)}
                       >
@@ -1720,7 +1327,7 @@ export default function EditTask() {
                   </View>
 
                   <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>วันที่</Text>
+                    <Text style={styles.smallLabel}>On day</Text>
 
                     <TextInput
                       style={styles.numberInput}
@@ -1734,7 +1341,7 @@ export default function EditTask() {
                       maxLength={2}
                     />
 
-                    <Text style={styles.smallLabel}>ของเดือน</Text>
+                    <Text style={styles.smallLabel}>of month</Text>
                   </View>
 
                   <View style={styles.customDayContainer}>
@@ -1750,7 +1357,8 @@ export default function EditTask() {
                         <Text
                           style={[
                             styles.dayButtonText,
-                            Number(monthDay) === day && styles.dayButtonTextActive,
+                            Number(monthDay) === day &&
+                            styles.dayButtonTextActive,
                           ]}
                         >
                           {day}
@@ -1758,82 +1366,23 @@ export default function EditTask() {
                       </Pressable>
                     ))}
                   </View>
+
+                  <Text style={styles.helpText}>
+                    This task will repeat every {monthInterval || 1} month(s) on
+                    day {monthDay || startDateTime.getDate()}.
+                  </Text>
                 </>
               )}
-            </SectionCard>
-          </>
-        ) : (
-          <>
-            <SectionCard
-              title="ข้อมูลพื้นฐาน"
-              icon="document-text-outline"
-              open={basicSectionOpen}
-              onToggle={() => setBasicSectionOpen((current) => !current)}
-            >
-              <Text style={styles.rescheduleTitle} numberOfLines={2}>
-                {title || text("Untitled Task", "ไม่มีชื่อกิจกรรม")}
-              </Text>
-
-              {detail ? (
-                <>
-                  <View style={styles.line} />
-                  <Text style={styles.rescheduleDetail}>{detail}</Text>
-                </>
-              ) : null}
-            </SectionCard>
-
-            <SectionCard
-              title="ตารางเวลา"
-              icon="time-outline"
-              open={scheduleSectionOpen}
-              onToggle={() => setScheduleSectionOpen((current) => !current)}
-            >
-              <View style={styles.row}>
-                <Text style={styles.label}>{text("Start", "เริ่ม")}</Text>
-
-                <Pressable
-                  style={styles.pickerBox}
-                  onPress={() => openPicker("start", "date")}
-                >
-                  <Text style={styles.pickerText}>{formatDate(startDateTime)}</Text>
-                </Pressable>
-
-                <Pressable
-                  style={styles.timeBox}
-                  onPress={() => openPicker("start", "time")}
-                >
-                  <Text style={styles.pickerText}>{formatTime(startDateTime)}</Text>
-                </Pressable>
-              </View>
-
-              <View style={styles.line} />
-
-              <View style={styles.row}>
-                <Text style={styles.label}>{text("End", "สิ้นสุด")}</Text>
-
-                <Pressable
-                  style={styles.pickerBox}
-                  onPress={() => openPicker("end", "date")}
-                >
-                  <Text style={styles.pickerText}>{formatDate(endDateTime)}</Text>
-                </Pressable>
-
-                <Pressable
-                  style={styles.timeBox}
-                  onPress={() => openPicker("end", "time")}
-                >
-                  <Text style={styles.pickerText}>{formatTime(endDateTime)}</Text>
-                </Pressable>
-              </View>
-            </SectionCard>
-
-            <View style={styles.infoCard}>
-              <Text style={styles.infoTitle}>โหมดเลื่อนเวลา</Text>
-              <Text style={styles.infoText}>
-                ระบบจะอัปเดตเฉพาะเวลาเริ่มต้นและเวลาสิ้นสุด รายละเอียดอื่นของกิจกรรมจะคงเดิม
-              </Text>
             </View>
           </>
+        ) : (
+          <View style={styles.infoCard}>
+            <Text style={styles.infoTitle}>Reschedule Mode</Text>
+            <Text style={styles.infoText}>
+              Only the start and end time will be updated. Other task details
+              will stay the same.
+            </Text>
+          </View>
         )}
 
         <Pressable
@@ -1841,11 +1390,19 @@ export default function EditTask() {
           onPress={handleUpdate}
           disabled={isSaving}
         >
-          <Text style={styles.saveText}>{getSaveButtonLabel()}</Text>
+          <Text style={styles.saveText}>
+            {isSaving
+              ? isRescheduleMode
+                ? "Rescheduling..."
+                : "Checking..."
+              : isRescheduleMode
+                ? "Save New Time"
+                : "Save Changes"}
+          </Text>
         </Pressable>
 
         <Pressable style={styles.cancelButton} onPress={handleBack}>
-          <Text style={styles.cancelText}>{text("Cancel", "ยกเลิก")}</Text>
+          <Text style={styles.cancelText}>Cancel</Text>
         </Pressable>
       </ScrollView>
 
@@ -1853,8 +1410,8 @@ export default function EditTask() {
         visible={timePickerVisible}
         title={
           timePickerTarget === "start"
-            ? text("Select start time", "เลือกเวลาเริ่ม")
-            : text("Select end time", "เลือกเวลาสิ้นสุด")
+            ? "Select start time"
+            : "Select end time"
         }
         initialDate={getPickerValue(timePickerTarget)}
         onClose={closeTimePicker}
@@ -1881,15 +1438,11 @@ export default function EditTask() {
             style={styles.editScopeModalBox}
             onPress={(event) => event.stopPropagation()}
           >
-            <Text style={styles.editScopeModalTitle}>
-              {text("Apply changes to", "ใช้การแก้ไขกับ")}
-            </Text>
+            <Text style={styles.editScopeModalTitle}>Apply changes to</Text>
 
             <Text style={styles.editScopeModalMessage}>
-              {text(
-                "This task is part of a recurring task group. Choose whether to update only this task or recreate the whole recurring group.",
-                "กิจกรรมนี้เป็นส่วนหนึ่งของกลุ่มกิจกรรมที่ทำซ้ำ เลือกว่าจะแก้เฉพาะกิจกรรมนี้ หรือแก้กิจกรรมที่ทำซ้ำทั้งหมด"
-              )}
+              This task is part of a recurring task group. Choose whether to
+              update only this task or recreate the whole recurring group.
             </Text>
 
             <Pressable
@@ -1897,7 +1450,7 @@ export default function EditTask() {
               onPress={() => handleChooseEditScope("single")}
             >
               <Text style={styles.editScopeModalPrimaryText}>
-                {text("This task only", "เฉพาะกิจกรรมนี้")}
+                This task only
               </Text>
             </Pressable>
 
@@ -1906,7 +1459,7 @@ export default function EditTask() {
               onPress={() => handleChooseEditScope("all")}
             >
               <Text style={styles.editScopeModalDangerText}>
-                {text("All recurring tasks", "กิจกรรมที่ทำซ้ำทั้งหมด")}
+                All recurring tasks
               </Text>
             </Pressable>
 
@@ -1917,9 +1470,7 @@ export default function EditTask() {
                 setPendingEditPayload(null);
               }}
             >
-              <Text style={styles.editScopeModalCancelText}>
-                {text("Cancel", "ยกเลิก")}
-              </Text>
+              <Text style={styles.editScopeModalCancelText}>Cancel</Text>
             </Pressable>
           </Pressable>
         </Pressable>
@@ -1939,21 +1490,21 @@ export default function EditTask() {
             style={styles.conflictModalBox}
             onPress={(event) => event.stopPropagation()}
           >
-            <Text style={styles.conflictModalTitle}>
-              {text("Time Conflict Detected", "พบเวลาทับซ้อน")}
-            </Text>
+            <Text style={styles.conflictModalTitle}>Time Conflict Detected</Text>
 
             <Text style={styles.conflictModalMessage}>
-              {getConflictMessage()}
+              {`Found ${conflictResult?.conflict_count || 0} conflicting task${(conflictResult?.conflict_count || 0) > 1 ? "s" : ""
+                }${conflictResult?.conflict_instance_count
+                  ? ` from ${conflictResult.conflict_instance_count} time slot${conflictResult.conflict_instance_count > 1 ? "s" : ""
+                  }`
+                  : ""
+                }.`}
             </Text>
 
             <View style={styles.conflictListBox}>
               {conflictPreviewItems.length === 0 ? (
                 <Text style={styles.conflictEmptyText}>
-                  {text(
-                    "No conflict details found",
-                    "ไม่พบรายละเอียดเวลาทับซ้อน"
-                  )}
+                  No conflict details found
                 </Text>
               ) : (
                 conflictPreviewItems.map((item, index) => (
@@ -1962,21 +1513,22 @@ export default function EditTask() {
                     style={styles.conflictItem}
                   >
                     <Text style={styles.conflictItemTitle} numberOfLines={1}>
-                      {item.title || text("Untitled Task", "ไม่มีชื่อกิจกรรม")}
+                      {item.title || "Untitled Task"}
                     </Text>
 
                     <Text style={styles.conflictItemTime}>
                       {formatConflictDate(item.start_time)} -{" "}
-                      {formatTime(item.start_time)}{" "}
-                      {text("to", "ถึง")} {formatTime(item.end_time)}
+                      {formatTime(item.start_time)} to{" "}
+                      {formatTime(item.end_time)}
                     </Text>
 
                     {item.conflict_instance_start_time ? (
                       <Text style={styles.conflictNewTime}>
-                        {text("New", "เวลาใหม่")}:{" "}
-                        {formatConflictDate(item.conflict_instance_start_time)}{" "}
-                        - {formatTime(item.conflict_instance_start_time)}{" "}
-                        {text("to", "ถึง")}{" "}
+                        New:{" "}
+                        {formatConflictDate(
+                          item.conflict_instance_start_time
+                        )}{" "}
+                        - {formatTime(item.conflict_instance_start_time)} to{" "}
                         {formatTime(item.conflict_instance_end_time)}
                       </Text>
                     ) : null}
@@ -1986,9 +1538,7 @@ export default function EditTask() {
 
               {remainingConflictCount > 0 && (
                 <Text style={styles.conflictMoreText}>
-                  {isThai
-                    ? `+ อีก ${remainingConflictCount} รายการ`
-                    : `+${remainingConflictCount} more conflicts`}
+                  +{remainingConflictCount} more conflicts
                 </Text>
               )}
             </View>
@@ -1997,9 +1547,7 @@ export default function EditTask() {
               style={styles.changeTimeButton}
               onPress={handleChangeTimeFromConflict}
             >
-              <Text style={styles.changeTimeText}>
-                {text("Change Time", "เปลี่ยนเวลา")}
-              </Text>
+              <Text style={styles.changeTimeText}>Change Time</Text>
             </Pressable>
 
             <Pressable
@@ -2011,9 +1559,7 @@ export default function EditTask() {
               disabled={isSaving}
             >
               <Text style={styles.saveAnywayText}>
-                {isSaving
-                  ? text("Saving...", "กำลังบันทึก...")
-                  : text("Save Anyway", "บันทึกต่อไป")}
+                {isSaving ? "Saving..." : "Save Anyway"}
               </Text>
             </Pressable>
 
@@ -2021,9 +1567,7 @@ export default function EditTask() {
               style={styles.cancelConflictButton}
               onPress={handleCancelConflict}
             >
-              <Text style={styles.cancelConflictText}>
-                {text("Cancel", "ยกเลิก")}
-              </Text>
+              <Text style={styles.cancelConflictText}>Cancel</Text>
             </Pressable>
           </Pressable>
         </Pressable>
@@ -2033,161 +1577,6 @@ export default function EditTask() {
 }
 
 const styles = StyleSheet.create({
-  sectionCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 14,
-    overflow: "hidden",
-  },
-
-  sectionHeader: {
-    minHeight: 52,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  sectionHeaderLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flex: 1,
-  },
-
-  sectionIconBox: {
-    width: 26,
-    height: 26,
-    borderRadius: 8,
-    backgroundColor: COLORS.primaryLight,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  sectionCardTitle: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: COLORS.text,
-  },
-  sectionBody: {
-    paddingHorizontal: 14,
-    paddingBottom: 16,
-    gap: 2,
-  },
-
-  compactTitleInput: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: COLORS.text,
-    backgroundColor: COLORS.cardSoft,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 10,
-  },
-
-  compactDetailInput: {
-    fontSize: 14,
-    color: COLORS.text,
-    backgroundColor: COLORS.cardSoft,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 70,
-  },
-
-  labelWithInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 14,
-    marginBottom: 10,
-  },
-
-  subSectionTitleNoMargin: {
-    fontSize: 15,
-    color: COLORS.textMuted,
-    fontWeight: "800",
-  },
-
-  infoButton: {
-    width: 28,
-    height: 28,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  dropdownButton: {
-    minHeight: 50,
-    borderRadius: 16,
-    backgroundColor: COLORS.cardSoft,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 14,
-    marginBottom: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  dropdownButtonText: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  dropdownMenu: {
-    backgroundColor: COLORS.cardSoft,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 14,
-    overflow: "hidden",
-  },
-
-  dropdownItem: {
-    paddingVertical: 13,
-    paddingHorizontal: 14,
-  },
-
-  dropdownItemActive: {
-    backgroundColor: COLORS.primary,
-  },
-
-  dropdownItemText: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  dropdownItemTextActive: {
-    color: COLORS.textLight,
-  },
-
-  dropdownItemRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  dropdownItemMain: {
-    flex: 1,
-    paddingVertical: 13,
-    paddingHorizontal: 14,
-  },
-
-  dropdownInfoButton: {
-    width: 44,
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   screen: {
     flex: 1,
     backgroundColor: COLORS.background,
@@ -2284,63 +1673,52 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   line: {
-    height: 0,
-    backgroundColor: "transparent",
-    marginVertical: 4,
+    height: 1,
+    backgroundColor: COLORS.divider || COLORS.border,
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    marginBottom: 12,
+    paddingVertical: 16,
+    gap: 8,
   },
   label: {
-    width: 86,
-    fontSize: 17,
+    fontSize: 20,
+    flex: 1,
     color: COLORS.text,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   pickerBox: {
-    flex: 1,
-    minHeight: 46,
     backgroundColor: COLORS.cardSoft,
     borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    padding: 10,
+    width: 145,
     alignItems: "center",
-    justifyContent: "center",
     borderWidth: 1,
     borderColor: COLORS.border,
   },
   timeBox: {
-    width: 92,
-    minHeight: 46,
     backgroundColor: COLORS.cardSoft,
     borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    padding: 10,
+    width: 90,
     alignItems: "center",
-    justifyContent: "center",
     borderWidth: 1,
     borderColor: COLORS.border,
   },
   deadlineBox: {
-    flex: 1,
-    minHeight: 46,
     backgroundColor: COLORS.cardSoft,
     borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    padding: 10,
+    width: 190,
     alignItems: "center",
-    justifyContent: "center",
     borderWidth: 1,
     borderColor: COLORS.border,
   },
   pickerText: {
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "700",
     color: COLORS.text,
-    textAlign: "center",
   },
   sectionTitle: {
     fontSize: 22,
@@ -2357,17 +1735,14 @@ const styles = StyleSheet.create({
   priorityContainer: {
     flexDirection: "row",
     gap: 8,
-    paddingBottom: 14,
+    paddingBottom: 16,
   },
   priorityButton: {
     flex: 1,
-    borderRadius: 14,
-    paddingVertical: 9,
-    paddingHorizontal: 8,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
     borderWidth: 1,
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
   },
   priorityButtonActive: {
     borderWidth: 2,
@@ -2386,12 +1761,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.danger,
   },
   priorityText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "900",
     textAlign: "center",
-    width: "100%",
-    includeFontPadding: false,
-    textAlignVertical: "center",
   },
   priorityDescription: {
     marginTop: 4,
@@ -2752,83 +2124,6 @@ const styles = StyleSheet.create({
   cancelConflictText: {
     color: COLORS.text,
     fontSize: 16,
-    fontWeight: "700",
-  },
-  allDayRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    marginBottom: 12,
-    minHeight: 46,
-  },
-  allDayTextBox: {
-    flex: 1,
-  },
-
-  allDayTitle: {
-    fontSize: 17,
-    fontWeight: "900",
-    color: COLORS.text,
-  },
-  allDayToggle: {
-    width: 52,
-    height: 30,
-    borderRadius: 999,
-    padding: 3,
-    backgroundColor: COLORS.border,
-    justifyContent: "center",
-  },
-
-  allDayToggleActive: {
-    backgroundColor: COLORS.primary,
-  },
-
-  allDayToggleKnob: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: COLORS.surface,
-  },
-
-  allDayToggleKnobActive: {
-    alignSelf: "flex-end",
-  },
-
-  timeBoxDisabled: {
-    backgroundColor: COLORS.cardSoft,
-    borderRadius: 14,
-    padding: 10,
-    width: 90,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    opacity: 0.75,
-  },
-
-  disabledTimeText: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: COLORS.textMuted,
-  },
-
-  allDayInfoBox: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 8,
-    padding: 12,
-    borderRadius: 14,
-    backgroundColor: COLORS.primaryLight,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    marginVertical: 12,
-  },
-
-  allDayInfoText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 18,
-    color: COLORS.text,
     fontWeight: "700",
   },
 });
