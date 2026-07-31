@@ -1,14 +1,15 @@
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 
 import {
-    deleteExternalEventsBySource,
-    saveExternalEventsBatch,
+  deleteExternalEventsBySource,
+  saveExternalEventsBatch,
 } from "./externalEventService";
 
 const GOOGLE_CALENDAR_SOURCE = "google_calendar";
 
 const GOOGLE_CALENDAR_SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
 ];
 
 /*
@@ -480,5 +481,33 @@ export const syncGoogleCalendarEvents = async (options = {}) => {
 };
 
 export const disconnectGoogleCalendarEvents = async () => {
-  return deleteExternalEventsBySource(GOOGLE_CALENDAR_SOURCE);
+  // ลบ Google Calendar Events ที่นำเข้าไว้ใน Firestore
+  const result = await deleteExternalEventsBySource(
+    GOOGLE_CALENDAR_SOURCE
+  );
+
+  // เตรียม Google Sign-In configuration ก่อนถอนสิทธิ์
+  configureGoogleSignin();
+
+  try {
+    await GoogleSignin.revokeAccess();
+    console.log("Google Calendar access revoked");
+  } catch (error) {
+    console.log(
+      "Google revoke access skipped:",
+      error?.message
+    );
+  }
+
+  try {
+    await GoogleSignin.signOut();
+    console.log("Google account signed out");
+  } catch (error) {
+    console.log(
+      "Google sign out skipped:",
+      error?.message
+    );
+  }
+
+  return result;
 };

@@ -2359,7 +2359,7 @@ const styles = StyleSheet.create({
   },
   dotRow: {
     height: 10,
-    marginTop: 2,
+    marginTop: 4,
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",

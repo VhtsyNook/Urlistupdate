@@ -210,6 +210,7 @@ export default function ProfileScreen() {
 
               const result = await disconnectGoogleCalendarEvents();
 
+          
               Alert.alert(
                 text("Disconnected", "ยกเลิกการเชื่อมต่อแล้ว"),
                 text(
@@ -272,7 +273,7 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <View style={[styles.sectionHeader, { display: "none" }]}>
+        <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>
             {text("Calendar Integration", "การเชื่อมต่อปฏิทิน")}
           </Text>
@@ -284,7 +285,7 @@ export default function ProfileScreen() {
           </Text>
         </View>
 
-        <View style={[styles.calendarCard, { display: "none" }]}>
+        <View style={styles.calendarCard}>
           <Pressable
             style={styles.calendarItem}
             onPress={handleConnectGoogleCalendar}
@@ -353,7 +354,7 @@ export default function ProfileScreen() {
           <View style={styles.divider} />
 
           <Pressable
-            style={[styles.calendarItem, { display: "none" }]}
+            style={styles.calendarItem}
             onPress={handleSyncCalendarNow}
             disabled={isSyncingGoogle}
           >
