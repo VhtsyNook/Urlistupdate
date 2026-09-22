@@ -26,13 +26,17 @@ export const getDayOnly = (date) => {
 
 export const roundUpToNextFiveMinutes = (date) => {
   const nextDate = new Date(date);
+  const originalSeconds = nextDate.getSeconds();
+  const originalMilliseconds = nextDate.getMilliseconds();
   const minutes = nextDate.getMinutes();
-  const roundedMinutes = Math.ceil(minutes / 5) * 5;
+  const remainder = minutes % 5;
 
-  if (roundedMinutes === 60) {
-    nextDate.setHours(nextDate.getHours() + 1, 0, 0, 0);
-  } else {
-    nextDate.setMinutes(roundedMinutes, 0, 0);
+  nextDate.setSeconds(0, 0);
+
+  if (remainder !== 0) {
+    nextDate.setMinutes(minutes + (5 - remainder));
+  } else if (originalSeconds > 0 || originalMilliseconds > 0) {
+    nextDate.setMinutes(minutes + 5);
   }
 
   return nextDate;
@@ -40,6 +44,34 @@ export const roundUpToNextFiveMinutes = (date) => {
 
 export const getDurationMinutes = (start, end) => {
   return Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+};
+
+export const isPlanningParentTask = (task) => {
+  if (!task) return false;
+
+  return (
+    task.task_type === "planned_task" ||
+    (task.planning_enabled === true &&
+      task.is_generated_session !== true &&
+      !task.parent_task_id)
+  );
+};
+
+export const getTaskDurationMinutes = (task) => {
+  const estimatedMinutes = Number(task?.estimated_duration_minutes);
+
+  if (Number.isFinite(estimatedMinutes) && estimatedMinutes > 0) {
+    return estimatedMinutes;
+  }
+
+  const startTime = normalizeDate(task?.start_time);
+  const endTime = normalizeDate(task?.end_time);
+
+  if (startTime && endTime && endTime > startTime) {
+    return getDurationMinutes(startTime, endTime);
+  }
+
+  return 60;
 };
 
 export const mergeBusySlots = (busySlots) => {
@@ -74,6 +106,7 @@ export const getFreeTimeSlotsForDate = (tasks, date, options = {}) => {
     minSlotMinutes = 15,
     startHour = 0,
     endHour = 23,
+    endMinute = 0,
     includeCompleted = false,
   } = options;
 
@@ -93,7 +126,7 @@ export const getFreeTimeSlotsForDate = (tasks, date, options = {}) => {
   dayStart.setHours(startHour, 0, 0, 0);
 
   const dayEnd = new Date(date);
-  dayEnd.setHours(endHour, 0, 0, 0);
+  dayEnd.setHours(endHour, endMinute, 0, 0);
 
   if (selectedDay.getTime() === todayOnly.getTime()) {
     dayStart = roundUpToNextFiveMinutes(now);
@@ -108,6 +141,7 @@ export const getFreeTimeSlotsForDate = (tasks, date, options = {}) => {
 
   const busySlots = tasks
     .filter((task) => {
+      if (isPlanningParentTask(task)) return false;
       if (includeCompleted) return true;
       return !task.is_completed;
     })
@@ -255,7 +289,7 @@ export const buildRecommendationReasons = (task, slot) => {
   const reasons = [];
 
   const priority = String(task.priority || "Medium").toLowerCase();
-  const duration = Number(task.estimated_duration_minutes || 60);
+  const duration = getTaskDurationMinutes(task);
   const deadline = normalizeDate(task.deadline);
 
   if (priority === "high") {
@@ -307,7 +341,7 @@ export const buildRecommendationReasons = (task, slot) => {
 };
 
 export const scoreTaskForSlot = (task, slot) => {
-  const duration = Number(task.estimated_duration_minutes || 60);
+  const duration = getTaskDurationMinutes(task);
 
   const priorityScore = getPriorityScore(task.priority);
   const deadlineScore = getDeadlineScore(task.deadline);
@@ -338,6 +372,7 @@ export const getCandidateTasksForRecommendation = (tasks, selectedDate) => {
 
   return tasks.filter((task) => {
     if (task.is_completed) return false;
+    if (isPlanningParentTask(task)) return false;
 
     const startTime = normalizeDate(task.start_time);
     const deadline = normalizeDate(task.deadline);
@@ -374,6 +409,7 @@ export const getSmartRecommendationsForSlots = (tasks, freeSlots, options = {}) 
 
   const recommendations = freeSlots.map((slot) => {
     const scoredTasks = candidateTasks
+      .filter((task) => getTaskDurationMinutes(task) <= slot.duration_minutes)
       .map((task) => scoreTaskForSlot(task, slot))
       .sort((a, b) => b.score - a.score);
 
@@ -392,6 +428,7 @@ export const getBestRecommendationForDate = (tasks, selectedDate, options = {}) 
     minSlotMinutes: options.minSlotMinutes || 15,
     startHour: options.startHour ?? 0,
     endHour: options.endHour ?? 23,
+    endMinute: options.endMinute ?? 0,
     includeCompleted: false,
   });
 

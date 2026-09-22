@@ -1,4 +1,7 @@
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import { collection, deleteDoc, doc, getDocs, updateDoc } from "firebase/firestore";
+
+import { auth, db } from "../config/firebase";
 
 import {
   deleteExternalEventsBySource,
@@ -155,6 +158,16 @@ const shouldSyncCalendar = (calendar = {}) => {
   return true;
 };
 
+const isUrlistGeneratedGoogleEvent = (event = {}) => {
+  const privateProperties =
+    event.extendedProperties?.private || {};
+
+  return (
+    privateProperties.source === "urlist" ||
+    Boolean(privateProperties.urlistTaskId)
+  );
+};
+
 const normalizeGoogleCalendarEvent = (
   event = {},
   calendar = { id: "primary", summary: "Primary" }
@@ -229,10 +242,20 @@ const requestGoogleCalendarAccessInternal = async () => {
     showPlayServicesUpdateDialog: true,
   });
 
-  try {
-    await GoogleSignin.signInSilently();
-  } catch (error) {
-    await GoogleSignin.signIn();
+  let googleUser = GoogleSignin.getCurrentUser();
+
+  // ใช้บัญชี Google ที่ล็อกอินเข้าแอปอยู่เท่านั้น
+  if (!googleUser) {
+    try {
+      await GoogleSignin.signInSilently();
+      googleUser = GoogleSignin.getCurrentUser();
+    } catch (error) {
+      throw new Error("GOOGLE_RELOGIN_REQUIRED");
+    }
+  }
+
+  if (!googleUser) {
+    throw new Error("GOOGLE_RELOGIN_REQUIRED");
   }
 
   try {
@@ -273,6 +296,28 @@ export const requestGoogleCalendarAccess = async () => {
   } finally {
     calendarAccessPromise = null;
   }
+};
+
+export const requestGoogleCalendarAccessSilently = async () => {
+  configureGoogleSignin();
+
+  await GoogleSignin.hasPlayServices({
+    showPlayServicesUpdateDialog: true,
+  });
+
+  try {
+    await GoogleSignin.signInSilently();
+  } catch (error) {
+    throw new Error("GOOGLE_CALENDAR_NOT_CONNECTED");
+  }
+
+  const tokens = await GoogleSignin.getTokens();
+
+  if (!tokens?.accessToken) {
+    throw new Error("GOOGLE_ACCESS_TOKEN_NOT_FOUND");
+  }
+
+  return tokens.accessToken;
 };
 
 export const fetchGoogleCalendarList = async (accessToken) => {
@@ -369,6 +414,11 @@ export const fetchGoogleCalendarEvents = async (options = {}) => {
 
   return events
     .filter((event) => event.status !== "cancelled")
+    .filter(
+      (event) =>
+        !isUrlistGeneratedGoogleEvent(event)
+    )
+
     .map((event) =>
       normalizeGoogleCalendarEvent(event, {
         id: calendarId,
@@ -429,9 +479,14 @@ export const syncGoogleCalendarEvents = async (options = {}) => {
     daysForward = DEFAULT_SYNC_DAYS_FORWARD,
     clearOldEvents = false,
     syncAllCalendars = true,
+
+    // true = ดึงแบบเงียบ ไม่เปิดหน้า OAuth
+    silent = false,
   } = options;
 
-  const accessToken = await requestGoogleCalendarAccess();
+  const accessToken = silent
+    ? await requestGoogleCalendarAccessSilently()
+    : await requestGoogleCalendarAccess();
 
   let calendars = [];
   let events = [];
@@ -480,34 +535,315 @@ export const syncGoogleCalendarEvents = async (options = {}) => {
   };
 };
 
+const toTaskDate = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value.toDate === "function") return value.toDate();
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getLocalTimeZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Bangkok";
+  } catch {
+    return "Asia/Bangkok";
+  }
+};
+
+const buildGoogleEventBodyFromTask = (task = {}) => {
+  const startTime = toTaskDate(task.start_time);
+  const endTime = toTaskDate(task.end_time);
+
+  if (!startTime || !endTime || endTime <= startTime) {
+    throw new Error("URLIST_TASK_TIME_INVALID");
+  }
+
+  const descriptionParts = [];
+
+  if (task.detail) {
+    descriptionParts.push(String(task.detail));
+  }
+
+  descriptionParts.push("สร้างและซิงก์จาก Urlist");
+
+  return {
+    summary: task.title || "Urlist Task",
+    description: descriptionParts.join("\n\n"),
+    start: {
+      dateTime: startTime.toISOString(),
+      timeZone: getLocalTimeZone(),
+    },
+    end: {
+      dateTime: endTime.toISOString(),
+      timeZone: getLocalTimeZone(),
+    },
+    extendedProperties: {
+      private: {
+        urlistTaskId: String(task.id || ""),
+        source: "urlist",
+      },
+    },
+  };
+};
+
+const requestGoogleCalendarApi = async ({
+  accessToken,
+  method,
+  url,
+  body,
+}) => {
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+  const responseText = await response.text();
+  const data = responseText ? JSON.parse(responseText) : null;
+
+  if (!response.ok) {
+    const error = new Error(
+      data?.error?.message || `GOOGLE_CALENDAR_${method}_FAILED`
+    );
+
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
+};
+
+export const createGoogleCalendarEventFromTask = async (
+  task,
+  options = {}
+) => {
+  const accessToken =
+    options.accessToken || (await requestGoogleCalendarAccess());
+
+  const calendarId = options.calendarId || "primary";
+  const eventBody = buildGoogleEventBodyFromTask(task);
+
+  return requestGoogleCalendarApi({
+    accessToken,
+    method: "POST",
+    url: `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId
+    )}/events`,
+    body: eventBody,
+  });
+};
+
+export const updateGoogleCalendarEventFromTask = async (
+  googleEventId,
+  task,
+  options = {}
+) => {
+  if (!googleEventId) {
+    throw new Error("GOOGLE_EVENT_ID_REQUIRED");
+  }
+
+  const accessToken =
+    options.accessToken || (await requestGoogleCalendarAccess());
+
+  const calendarId = options.calendarId || "primary";
+  const eventBody = buildGoogleEventBodyFromTask(task);
+
+  return requestGoogleCalendarApi({
+    accessToken,
+    method: "PATCH",
+    url: `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId
+    )}/events/${encodeURIComponent(googleEventId)}`,
+    body: eventBody,
+  });
+};
+
+export const deleteGoogleCalendarEvent = async (
+  googleEventId,
+  options = {}
+) => {
+  if (!googleEventId) {
+    return {
+      success: true,
+      skipped: true,
+    };
+  }
+
+  const accessToken =
+    options.accessToken ||
+    (options.silent
+      ? await requestGoogleCalendarAccessSilently()
+      : await requestGoogleCalendarAccess());
+
+  const calendarId = options.calendarId || "primary";
+
+  await requestGoogleCalendarApi({
+    accessToken,
+    method: "DELETE",
+    url: `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId
+    )}/events/${encodeURIComponent(googleEventId)}`,
+  });
+
+  return {
+    success: true,
+    skipped: false,
+  };
+};
+
+export const syncUrlistTasksToGoogleCalendar = async (options = {}) => {
+  const user = auth.currentUser;
+
+  if (!user) {
+    throw new Error("AUTH_REQUIRED");
+  }
+
+  const calendarId = options.calendarId || "primary";
+  const accessToken = options.silent
+    ? await requestGoogleCalendarAccessSilently()
+    : await requestGoogleCalendarAccess();
+
+  const taskCollectionRef = collection(
+    db,
+    "users",
+    user.uid,
+    "tasks"
+  );
+
+  const taskSnapshot = await getDocs(taskCollectionRef);
+
+  let createdCount = 0;
+  let updatedCount = 0;
+  let deletedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  for (const taskDoc of taskSnapshot.docs) {
+    const task = {
+      id: taskDoc.id,
+      ...taskDoc.data(),
+    };
+
+    const startTime = toTaskDate(task.start_time);
+    const endTime = toTaskDate(task.end_time);
+
+    const isPlanningParent =
+      task.planning_enabled === true &&
+      task.is_generated_session !== true;
+
+    if (
+      !startTime ||
+      !endTime ||
+      endTime <= startTime ||
+      isPlanningParent
+    ) {
+      skippedCount += 1;
+      continue;
+    }
+
+    try {
+      let googleEvent = null;
+      let wasUpdated = false;
+
+      if (task.google_event_id) {
+        try {
+          googleEvent = await updateGoogleCalendarEventFromTask(
+            task.google_event_id,
+            task,
+            {
+              accessToken,
+              calendarId:
+                task.google_calendar_id || calendarId,
+            }
+          );
+
+          wasUpdated = true;
+        } catch (error) {
+          const wasDeletedFromGoogle =
+            error?.status === 404 ||
+            error?.status === 410;
+
+          if (wasDeletedFromGoogle) {
+            console.log(
+              "Google event was deleted. Removing linked Urlist task:",
+              {
+                taskId: taskDoc.id,
+                googleEventId: task.google_event_id,
+              }
+            );
+
+            await deleteDoc(taskDoc.ref);
+            deletedCount += 1;
+
+            // ข้ามการสร้าง Event กลับขึ้น Google
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      if (!googleEvent) {
+        googleEvent = await createGoogleCalendarEventFromTask(
+          task,
+          {
+            accessToken,
+            calendarId,
+          }
+        );
+      }
+
+      await updateDoc(
+        doc(db, "users", user.uid, "tasks", taskDoc.id),
+        {
+          google_event_id: googleEvent.id,
+          google_calendar_id: calendarId,
+          google_event_html_link: googleEvent.htmlLink || "",
+          google_synced_at: new Date(),
+        }
+      );
+
+      if (wasUpdated) {
+        updatedCount += 1;
+      } else {
+        createdCount += 1;
+      }
+    } catch (error) {
+      failedCount += 1;
+
+      console.log("Urlist task → Google Calendar sync failed:", {
+        taskId: taskDoc.id,
+        title: task.title,
+        message: error?.message,
+        status: error?.status,
+      });
+    }
+  }
+
+  return {
+    success: failedCount === 0,
+    total_count: taskSnapshot.size,
+    created_count: createdCount,
+    updated_count: updatedCount,
+    deleted_count: deletedCount,
+    skipped_count: skippedCount,
+    failed_count: failedCount,
+  };
+};
+
 export const disconnectGoogleCalendarEvents = async () => {
-  // ลบ Google Calendar Events ที่นำเข้าไว้ใน Firestore
+  // ลบเฉพาะกิจกรรม Google Calendar ที่นำเข้ามาใน Urlist
+  // ไม่ออกจากบัญชี Google เพราะบัญชีนี้ใช้ล็อกอินเข้าแอปอยู่
   const result = await deleteExternalEventsBySource(
     GOOGLE_CALENDAR_SOURCE
   );
-
-  // เตรียม Google Sign-In configuration ก่อนถอนสิทธิ์
-  configureGoogleSignin();
-
-  try {
-    await GoogleSignin.revokeAccess();
-    console.log("Google Calendar access revoked");
-  } catch (error) {
-    console.log(
-      "Google revoke access skipped:",
-      error?.message
-    );
-  }
-
-  try {
-    await GoogleSignin.signOut();
-    console.log("Google account signed out");
-  } catch (error) {
-    console.log(
-      "Google sign out skipped:",
-      error?.message
-    );
-  }
 
   return result;
 };

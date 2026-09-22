@@ -1,4 +1,4 @@
-﻿import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { useRootNavigationState, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -206,19 +206,42 @@ export default function TasksScreen() {
     return date > todayStart && !isToday(date);
   };
 
-  const isOverdueTask = (task, referenceTime = nowTick) => {
-    if (!task || task.is_completed === true) return false;
+  const isOverdueTask = (task) => {
+    if (!task || task.is_completed === true) {
+      return false;
+    }
 
-    const endDate = normalizeDate(task.end_time);
-    if (!isValidDate(endDate)) return false;
+    const isPlanningParent =
+      task.task_type === "planned_task" ||
+      (
+        task.planning_enabled === true &&
+        task.is_generated_session !== true &&
+        !task.parent_task_id
+      );
 
-    const nowMs = getComparableNowMs(referenceTime);
+    // กิจกรรมหลักแบบวางแผนติดตามผลจากกิจกรรมย่อย
+    // จึงไม่ใช้ end_time ตัดสินว่าเลยเวลา
+    if (isPlanningParent) {
+      return false;
+    }
 
-    return endDate.getTime() <= nowMs;
+    const endTime = normalizeDate(task.end_time);
+
+    if (!endTime) {
+      return false;
+    }
+
+    return endTime.getTime() < Date.now();
   };
 
   const isCompletedLateTask = (task) => {
     if (!task || !task.is_completed) return false;
+
+    // กิจกรรมหลักแบบวางแผนเสร็จจากความคืบหน้าของกิจกรรมย่อย
+    // จึงไม่เปรียบเทียบ completed_at กับเวลา end_time ของ parent
+    if (task.planning_enabled === true && !task.parent_task_id) {
+      return false;
+    }
 
     if (task.completed_late === true) return true;
 
@@ -483,14 +506,119 @@ export default function TasksScreen() {
     };
   };
 
+  const getPlanningSessionNumbers = (task) => {
+    const index = Number(task?.generated_session_index);
+    const total = Number(task?.generated_session_total);
+
+    const titleMatch = String(task?.title || "").match(
+      /(\d+)\s*\/\s*(\d+)\s*$/
+    );
+
+    return {
+      index:
+        Number.isFinite(index) && index > 0
+          ? index
+          : Number(titleMatch?.[1]) || 1,
+      total:
+        Number.isFinite(total) && total > 0
+          ? total
+          : Number(titleMatch?.[2]) || 1,
+    };
+  };
+
+  const getPlanningSessionBaseTitle = (task) => {
+    const originalTitle = String(task?.title || "").trim();
+    const titleWithoutSessionNumber = originalTitle
+      .replace(/\s+\d+\s*\/\s*\d+\s*$/, "")
+      .trim();
+
+    const normalizedTitle = titleWithoutSessionNumber.toLowerCase();
+    const genericPlanningTitles = new Set([
+      "กิจกรรมแบบวางแผน",
+      "กิจกรรมวางแผน",
+      "กิจกรรมวางแผน",
+      "planning task",
+      "planned task",
+      "planning session",
+    ]);
+
+    const detail = String(task?.detail || "").trim();
+
+    if (
+      task?.is_generated_session === true &&
+      genericPlanningTitles.has(normalizedTitle) &&
+      detail
+    ) {
+      return detail;
+    }
+
+    return (
+      titleWithoutSessionNumber ||
+      originalTitle ||
+      text("Untitled Task", "ไม่มีชื่อกิจกรรม")
+    );
+  };
+
+  const getTaskDisplayTitle = (task) => {
+    if (task?.is_generated_session === true) {
+      return getPlanningSessionBaseTitle(task);
+    }
+
+    return task?.title || text("Untitled Task", "ไม่มีชื่อกิจกรรม");
+  };
+
+  const getTaskDisplayDetail = (task) => {
+    const detail = String(task?.detail || "").trim();
+
+    if (!detail) return "";
+
+    if (task?.is_generated_session !== true) {
+      return detail;
+    }
+
+    const displayTitle = getPlanningSessionBaseTitle(task).trim().toLowerCase();
+
+    if (detail.toLowerCase() === displayTitle) {
+      return "";
+    }
+
+    const originalBaseTitle = String(task?.title || "")
+      .replace(/\s+\d+\s*\/\s*\d+\s*$/, "")
+      .trim()
+      .toLowerCase();
+
+    const genericPlanningTitles = new Set([
+      "กิจกรรมแบบวางแผน",
+      "กิจกรรมวางแผน",
+      "กิจกรรมวางแผน",
+      "planning task",
+      "planned task",
+      "planning session",
+    ]);
+
+    if (genericPlanningTitles.has(originalBaseTitle)) {
+      return "";
+    }
+
+    return detail;
+  };
+
+  const getPlanningSessionLabel = (task) => {
+    const { index, total } = getPlanningSessionNumbers(task);
+
+    return isThai
+      ? `รอบที่ ${index} จาก ${total}`
+      : `Session ${index} of ${total}`;
+  };
+
   const getRepeatLabel = (task) => {
     if (task?.is_generated_session) {
-      return text("Planning Session", "เซสชันวางแผน");
+      return getPlanningSessionLabel(task);
     }
 
     if (task?.planning_enabled) {
       return `${task.planned_completed_count || 0}/${task.planned_session_count || 0
-        } ${text("sessions", "เซสชัน")}`;
+        } ${text("sessions", "กิจกรรม")}`;
     }
 
     if (!task?.is_recurring) {
@@ -558,11 +686,11 @@ export default function TasksScreen() {
   };
 
   const getTaskTypeLabel = (task) => {
+    if (task.is_generated_session) {
+      return getPlanningSessionLabel(task);
+    }
     if (isOverdueTask(task)) return text("Overdue Task", "กิจกรรมที่เลยเวลา");
     if (isCompletedLateTask(task)) return text("Completed Late", "เสร็จล่าช้า");
-    if (task.is_generated_session) {
-      return text("Study / Planning Session", "เซสชันอ่าน/วางแผน");
-    }
     if (task.planning_enabled) {
       return text("Main Planning Task", "กิจกรรมหลักแบบวางแผน");
     }
@@ -572,6 +700,14 @@ export default function TasksScreen() {
   };
 
   const getTaskAccent = (task) => {
+    if (task.is_generated_session) {
+      return {
+        color: "#7C3AED",
+        backgroundColor: "#EDE9FE",
+        icon: "layers-outline",
+      };
+    }
+
     if (isOverdueTask(task)) {
       return {
         color: COLORS.danger,
@@ -593,14 +729,6 @@ export default function TasksScreen() {
         color: COLORS.danger,
         backgroundColor: "#FEE2E2",
         icon: "alert-circle-outline",
-      };
-    }
-
-    if (task.is_generated_session) {
-      return {
-        color: "#7C3AED",
-        backgroundColor: "#EDE9FE",
-        icon: "layers-outline",
       };
     }
 
@@ -643,7 +771,7 @@ export default function TasksScreen() {
     }
 
     if (deleteTargetTask.is_generated_session) {
-      return text("Delete Planning Session", "ลบเซสชันวางแผน");
+      return text("Delete Plan Session", "ลบกิจกรรมย่อยของแผน");
     }
 
     if (deleteTargetTask.is_recurring) {
@@ -658,15 +786,15 @@ export default function TasksScreen() {
 
     if (deleteTargetTask.planning_enabled) {
       return text(
-        "This task has generated planning sessions. What do you want to delete?",
-        "กิจกรรมนี้มีเซสชันย่อยที่ระบบสร้างไว้ ต้องการลบแบบใด?"
+        "This task has generated plan sessions. What do you want to delete?",
+        "กิจกรรมนี้มีกิจกรรมย่อยที่ระบบสร้างไว้ ต้องการลบแบบใด?"
       );
     }
 
     if (deleteTargetTask.is_generated_session) {
       return text(
-        "This is a generated planning session. Do you want to delete only this session?",
-        "นี่คือเซสชันวางแผนที่ระบบสร้างขึ้น ต้องการลบเฉพาะเซสชันนี้หรือไม่?"
+        "This is a generated plan session. Do you want to delete only this session?",
+        "นี่คือกิจกรรมย่อยที่ระบบสร้างจากแผน ต้องการลบเฉพาะรอบนี้หรือไม่?"
       );
     }
 
@@ -720,9 +848,17 @@ export default function TasksScreen() {
     const keyword = searchText.trim().toLowerCase();
 
     const result = tasks.filter((task) => {
-      const title = String(task.title || "").trim().toLowerCase();
+      const title = String(getTaskDisplayTitle(task) || "")
+        .trim()
+        .toLowerCase();
+      const detail = String(getTaskDisplayDetail(task) || "")
+        .trim()
+        .toLowerCase();
 
-      const matchesSearch = !keyword || title.startsWith(keyword);
+      const matchesSearch =
+        !keyword ||
+        title.startsWith(keyword) ||
+        detail.includes(keyword);
 
       if (!matchesSearch) return false;
 
@@ -755,12 +891,14 @@ export default function TasksScreen() {
 
     return tasks
       .filter((task) => {
-        const title = String(task.title || "").trim().toLowerCase();
+        const title = String(getTaskDisplayTitle(task) || "")
+          .trim()
+          .toLowerCase();
         return title.startsWith(keyword);
       })
       .sort((a, b) => {
-        const titleA = String(a.title || "").toLowerCase();
-        const titleB = String(b.title || "").toLowerCase();
+        const titleA = String(getTaskDisplayTitle(a) || "").toLowerCase();
+        const titleB = String(getTaskDisplayTitle(b) || "").toLowerCase();
 
         return titleA.localeCompare(titleB);
       })
@@ -837,7 +975,7 @@ export default function TasksScreen() {
       },
       {
         key: "planning-sessions",
-        title: text("Planning Sessions", "เซสชันวางแผน"),
+        title: text("Plan Sessions", "กิจกรรมย่อยของแผน"),
         icon: "flash-outline",
         color: "#7C3AED",
         backgroundColor: "#EDE9FE",
@@ -1371,7 +1509,7 @@ export default function TasksScreen() {
         text("Error", "เกิดข้อผิดพลาด"),
         text(
           "Unable to delete planning task and sessions.",
-          "ไม่สามารถลบกิจกรรมแบบวางแผนและเซสชันย่อยได้"
+          "ไม่สามารถลบกิจกรรมแบบวางแผนและกิจกรรมย่อยได้"
         )
       );
     } finally {
@@ -1399,23 +1537,42 @@ export default function TasksScreen() {
     const isCompletedLate = isCompletedLateTask(task);
     const hideTypeTag = sectionKey === "completed-late";
     const showRescheduleButton = sectionKey === "overdue-tasks";
+    const isPlanningSession = task.is_generated_session === true;
+    const displayTitle = getTaskDisplayTitle(task);
+    const displayDetail = getTaskDisplayDetail(task);
 
     return (
       <View key={task.id} style={styles.taskCard}>
-        <Pressable
-          style={[
-            styles.checkButton,
-            task.is_completed && styles.checkButtonActive,
-            isCompletedLate && styles.checkButtonLateActive,
-          ]}
-          onPress={() =>
-            task.is_completed ? handleUndoTask(task.id) : handleDoneTask(task.id)
-          }
-        >
-          {task.is_completed ? (
-            <Ionicons name="checkmark" size={18} color={COLORS.textLight} />
-          ) : null}
-        </Pressable>
+        {task.planning_enabled === true && !isPlanningSession ? (
+          <View style={styles.planningParentStatusSlot}>
+            {task.is_completed ? (
+              <View style={[styles.checkButton, styles.checkButtonActive]}>
+                <Ionicons
+                  name="checkmark"
+                  size={18}
+                  color={COLORS.textLight}
+                />
+              </View>
+            ) : null}
+          </View>
+        ) : (
+          <Pressable
+            style={[
+              styles.checkButton,
+              task.is_completed && styles.checkButtonActive,
+              isCompletedLate && styles.checkButtonLateActive,
+            ]}
+            onPress={() =>
+              task.is_completed
+                ? handleUndoTask(task.id)
+                : handleDoneTask(task.id)
+            }
+          >
+            {task.is_completed ? (
+              <Ionicons name="checkmark" size={18} color={COLORS.textLight} />
+            ) : null}
+          </Pressable>
+        )}
 
         <View style={styles.taskInfo}>
           <View style={styles.taskTitleRow}>
@@ -1426,13 +1583,13 @@ export default function TasksScreen() {
               ]}
               numberOfLines={1}
             >
-              {task.title || text("Untitled Task", "ไม่มีชื่อกิจกรรม")}
+              {displayTitle}
             </Text>
           </View>
 
-          {task.detail ? (
-            <Text style={styles.taskDetail} numberOfLines={1}>
-              {task.detail}
+          {displayDetail ? (
+            <Text style={styles.taskDetail} numberOfLines={2}>
+              {displayDetail}
             </Text>
           ) : null}
 
@@ -1463,7 +1620,7 @@ export default function TasksScreen() {
                   {text("Progress", "ความคืบหน้า")}:{" "}
                   {task.planned_completed_count || 0}/
                   {task.planned_session_count || 0}{" "}
-                  {text("sessions completed", "เซสชันเสร็จแล้ว")}
+                  {text("sessions completed", "กิจกรรมเสร็จแล้ว")}
                 </Text>
                 <Text style={styles.progressPercent}>
                   {task.planned_session_count
@@ -1533,18 +1690,18 @@ export default function TasksScreen() {
               </Text>
             </View>
 
-            <View style={styles.repeatTag}>
-              <Ionicons
-                name={
-                  task.is_generated_session ? "layers-outline" : "repeat-outline"
-                }
-                size={14}
-                color={COLORS.primary}
-              />
-              <Text style={styles.repeatText}>{getRepeatLabel(task)}</Text>
-            </View>
+            {!isPlanningSession ? (
+              <View style={styles.repeatTag}>
+                <Ionicons
+                  name="repeat-outline"
+                  size={14}
+                  color={COLORS.primary}
+                />
+                <Text style={styles.repeatText}>{getRepeatLabel(task)}</Text>
+              </View>
+            ) : null}
 
-            {task.deadline ? (
+            {task.deadline && !isPlanningSession ? (
               <View style={styles.deadlineTag}>
                 <Ionicons
                   name="hourglass-outline"
@@ -1552,7 +1709,10 @@ export default function TasksScreen() {
                   color={COLORS.warning}
                 />
                 <Text style={styles.deadlineText}>
-                  {text("Deadline", "กำหนดส่ง")} {formatDate(task.deadline)}
+                  {task.planning_enabled
+                    ? text("Last day", "วันสุดท้ายของแผน")
+                    : text("Deadline", "กำหนดส่ง")}{" "}
+                  {formatDate(task.deadline)}
                 </Text>
               </View>
             ) : null}
@@ -1599,12 +1759,14 @@ export default function TasksScreen() {
             </Pressable>
           ) : null}
 
-          <Pressable
-            style={styles.iconAction}
-            onPress={() => handleEditTask(task.id)}
-          >
-            <Ionicons name="create-outline" size={20} color={COLORS.text} />
-          </Pressable>
+          {!isPlanningSession ? (
+            <Pressable
+              style={styles.iconAction}
+              onPress={() => handleEditTask(task.id)}
+            >
+              <Ionicons name="create-outline" size={20} color={COLORS.text} />
+            </Pressable>
+          ) : null}
 
           <Pressable
             style={styles.iconAction}
@@ -1737,6 +1899,11 @@ export default function TasksScreen() {
         style={styles.content}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
+        keyboardDismissMode="none"
+        overScrollMode="never"
+        bounces={false}
+        alwaysBounceVertical={false}
+        alwaysBounceHorizontal={false}
       >
         <View style={styles.header}>
           <View>
@@ -1787,7 +1954,7 @@ export default function TasksScreen() {
 
                 <View style={styles.searchSuggestionTextBox}>
                   <Text style={styles.searchSuggestionTitle} numberOfLines={1}>
-                    {task.title || text("Untitled Task", "ไม่มีชื่อกิจกรรม")}
+                    {getTaskDisplayTitle(task)}
                   </Text>
 
                   <Text style={styles.searchSuggestionTime} numberOfLines={1}>
@@ -1898,7 +2065,7 @@ export default function TasksScreen() {
               {tasks.filter((task) => task.is_generated_session).length}
             </Text>
             <Text style={styles.summaryLabel}>
-              {text("Sessions", "เซสชัน")}
+              {text("Sessions", "กิจกรรม")}
             </Text>
           </View>
 
@@ -2429,6 +2596,11 @@ export default function TasksScreen() {
                 showsVerticalScrollIndicator={true}
                 nestedScrollEnabled={true}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="none"
+                overScrollMode="never"
+                bounces={false}
+                alwaysBounceVertical={false}
+                alwaysBounceHorizontal={false}
               >
                 {smartRescheduleSlots.map((slot, index) => {
                   const slotStart = normalizeDate(slot.start_time);
@@ -2661,7 +2833,7 @@ export default function TasksScreen() {
                 <Text style={styles.dangerModalButtonText}>
                   {text(
                     "Delete Study Plan and All Sessions",
-                    "ลบแผนการเรียนและเซสชันทั้งหมด"
+                    "ลบแผนกิจกรรมทั้งหมด"
                   )}
                 </Text>
               </Pressable>
@@ -2800,7 +2972,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingHorizontal: 22,
-    paddingTop: 62,
+    paddingTop: 22,
     paddingBottom: 170,
   },
   header: {
@@ -3131,6 +3303,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     flexDirection: "row",
     gap: 12,
+  },
+  planningParentStatusSlot: {
+    width: 26,
+    minHeight: 26,
+    marginTop: 2,
+    alignItems: "center",
+    justifyContent: "center",
   },
   checkButton: {
     width: 26,

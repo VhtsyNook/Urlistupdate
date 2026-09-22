@@ -1,4 +1,4 @@
-﻿import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -14,7 +14,7 @@ import {
   View,
 } from "react-native";
 
-import TimePickerModal from "../src/components/TimePickerModal";
+//import TimePickerModal from "../src/components/TimePickerModal";
 import { auth } from "../src/config/firebase";
 import { COLORS } from "../src/constants/theme";
 import { useLanguage } from "../src/i18n/LanguageContext";
@@ -113,13 +113,14 @@ export default function EditTask() {
   const [deadlineDate, setDeadlineDate] = useState(
     new Date(Date.now() + 24 * 60 * 60 * 1000)
   );
+  const [hasDeadline, setHasDeadline] = useState(true);
   const [estimatedDuration, setEstimatedDuration] = useState(60);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  const [timePickerVisible, setTimePickerVisible] = useState(false);
-  const [timePickerTarget, setTimePickerTarget] = useState(null);
+  //const [timePickerVisible, setTimePickerVisible] = useState(false);
+  //const [timePickerTarget, setTimePickerTarget] = useState(null);
 
   const [taskMode, setTaskMode] = useState("todo");
 
@@ -161,9 +162,8 @@ export default function EditTask() {
   ];
 
   const customDayOptions = Array.from({ length: 31 }, (_, index) => index + 1);
-  const weekIntervalOptions = [1, 2, 3, 4, 5, 6, 8, 12];
+
   const monthDayOptions = Array.from({ length: 31 }, (_, index) => index + 1);
-  const monthIntervalOptions = [1, 2, 3, 4, 6, 12];
 
   const priorityOptions = [
     {
@@ -362,13 +362,20 @@ export default function EditTask() {
         setIsAllDay(task.is_all_day === true);
 
         setPriority(task.priority || "Medium");
+
+        const loadedDeadline = normalizeDate(task.deadline);
+        const isPlanningTask =
+          task.planning_enabled === true || task.task_type === "planned_task";
+
+        setHasDeadline(Boolean(loadedDeadline) || isPlanningTask);
         setDeadlineDate(
-          normalizeDate(task.deadline) ||
+          loadedDeadline ||
           normalizeDate(task.end_time) ||
           new Date(Date.now() + 24 * 60 * 60 * 1000)
         );
         setEstimatedDuration(task.estimated_duration_minutes || 60);
-        if (task.planning_enabled === true || task.task_type === "planned_task") {
+
+        if (isPlanningTask) {
           setTaskMode("time");
         } else {
           setTaskMode("todo");
@@ -542,69 +549,112 @@ export default function EditTask() {
     }
   };
 
-  const openTimePicker = (target) => {
-    if (isSaving) return;
-
-    setTimePickerTarget(target);
-    setTimePickerVisible(true);
-  };
-
-  const closeTimePicker = () => {
-    setTimePickerVisible(false);
-    setTimePickerTarget(null);
-  };
-
-  const handleConfirmTime = ({ hour, minute }) => {
-    if (!timePickerTarget) {
-      closeTimePicker();
+  const handleTimePickerValueChange = (
+    target,
+    selectedValue
+  ) => {
+    if (!selectedValue || !target) {
       return;
     }
 
-    if (timePickerTarget === "start") {
-      const selectedStart = new Date(startDateTime);
-      selectedStart.setHours(hour, minute, 0, 0);
+    const selectedHour =
+      selectedValue.getHours();
 
-      const normalizedEnd = normalizeEndDateForStart(
-        selectedStart,
-        endDateTime
+    const selectedMinute =
+      selectedValue.getMinutes();
+
+    if (target === "start") {
+      const selectedStart =
+        new Date(startDateTime);
+
+      selectedStart.setHours(
+        selectedHour,
+        selectedMinute,
+        0,
+        0
       );
+
+      const normalizedEnd =
+        normalizeEndDateForStart(
+          selectedStart,
+          endDateTime
+        );
 
       setStartDateTime(selectedStart);
       setEndDateTime(normalizedEnd);
+
+      return;
     }
 
-    if (timePickerTarget === "end") {
-      const selectedEnd = buildDateWithTime(startDateTime, endDateTime);
-      selectedEnd.setHours(hour, minute, 0, 0);
+    if (target === "end") {
+      const selectedEnd =
+        buildDateWithTime(
+          startDateTime,
+          endDateTime
+        );
 
+      selectedEnd.setHours(
+        selectedHour,
+        selectedMinute,
+        0,
+        0
+      );
+
+      // ถ้าเวลาสิ้นสุดน้อยกว่าเวลาเริ่ม
+      // ให้ตีความว่าเป็นวันถัดไป
       if (selectedEnd <= startDateTime) {
-        selectedEnd.setDate(selectedEnd.getDate() + 1);
+        selectedEnd.setDate(
+          selectedEnd.getDate() + 1
+        );
       }
 
       setEndDateTime(selectedEnd);
     }
-
-    closeTimePicker();
   };
 
   const openPicker = (target, mode) => {
-    if (isSaving) return;
-
-    if (mode === "time") {
-      openTimePicker(target);
+    if (isSaving) {
       return;
     }
 
-    DateTimePickerAndroid.open({
-      value: getPickerValue(target) || new Date(),
-      mode: "date",
-      is24Hour: true,
-      display: "default",
-      onChange: (event, selectedValue) => {
-        if (event?.type === "dismissed") return;
-        if (!selectedValue) return;
+    const pickerMode =
+      mode === "time" ? "time" : "date";
 
-        handleDatePickerValueChange(target, selectedValue);
+    DateTimePickerAndroid.open({
+      value:
+        getPickerValue(target) ||
+        new Date(),
+
+      mode: pickerMode,
+
+      // ใช้เวลาแบบ 24 ชั่วโมง
+      is24Hour: true,
+
+      // ใช้หน้าตาของเครื่องผู้ใช้
+      display: "default",
+
+      onChange: (event, selectedValue) => {
+        if (event?.type === "dismissed") {
+          return;
+        }
+
+        if (!selectedValue) {
+          return;
+        }
+
+        if (pickerMode === "time") {
+          handleTimePickerValueChange(
+            target,
+            selectedValue
+          );
+
+          return;
+        }
+
+        handleDatePickerValueChange(
+          target,
+          selectedValue
+        );
       },
     });
   };
@@ -760,7 +810,7 @@ export default function EditTask() {
       task_type: "fixed",
 
       priority,
-      deadline: deadlineDate,
+      deadline: hasDeadline ? deadlineDate : null,
       estimated_duration_minutes: Number(estimatedDuration),
 
       is_recurring: repeatType !== RECURRENCE_TYPES.NONE,
@@ -1057,6 +1107,17 @@ export default function EditTask() {
       return;
     }
 
+    if (taskMode === "time" && !hasDeadline) {
+      Alert.alert(
+        text("Deadline Required", "ต้องมีเดดไลน์"),
+        text(
+          "Planning tasks require a deadline.",
+          "กิจกรรมแบบวางแผนจำเป็นต้องมีเดดไลน์"
+        )
+      );
+      return;
+    }
+
     if (!estimatedDuration || Number(estimatedDuration) <= 0) {
       Alert.alert(
         text("Error", "เกิดข้อผิดพลาด"),
@@ -1218,6 +1279,10 @@ export default function EditTask() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="none"
+        overScrollMode="never"
+        bounces={false}
+        alwaysBounceVertical={false}
+        alwaysBounceHorizontal={false}
       >
         <View style={styles.topNav}>
           <Pressable style={styles.navIconButton} onPress={handleBack}>
@@ -1359,16 +1424,84 @@ export default function EditTask() {
 
               <View style={styles.line} />
 
-              <View style={styles.row}>
-                <Text style={styles.label}>{text("Deadline", "กำหนดส่ง")}</Text>
+              <View style={styles.allDayRow}>
+                <View style={styles.allDayTextBox}>
+                  <View style={styles.deadlineTitleRow}>
+                    <Text style={styles.allDayTitle}>
+                      {text("Has deadline", "มีเดดไลน์")}
+                    </Text>
+
+                    <Pressable
+                      style={styles.infoButtonSmall}
+                      onPress={() =>
+                        Alert.alert(
+                          text("Deadline", "เดดไลน์"),
+                          text(
+                            "Turn this on when the task must be completed by a specific date. Planning tasks always require a deadline.",
+                            "เปิดเมื่องานต้องเสร็จภายในวันที่กำหนด ส่วนกิจกรรมแบบวางแผนจำเป็นต้องมีเดดไลน์เสมอ"
+                          )
+                        )
+                      }
+                    >
+                      <Ionicons
+                        name="information-circle-outline"
+                        size={17}
+                        color={COLORS.textMuted}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
 
                 <Pressable
-                  style={styles.deadlineBox}
-                  onPress={() => openPicker("deadline", "date")}
+                  style={[
+                    styles.allDayToggle,
+                    hasDeadline && styles.allDayToggleActive,
+                    taskMode === "time" && styles.toggleDisabled,
+                  ]}
+                  onPress={() => {
+                    if (taskMode === "time") {
+                      Alert.alert(
+                        text("Deadline Required", "ต้องมีเดดไลน์"),
+                        text(
+                          "Planning tasks require a deadline.",
+                          "กิจกรรมแบบวางแผนจำเป็นต้องมีเดดไลน์"
+                        )
+                      );
+                      return;
+                    }
+
+                    setHasDeadline((current) => !current);
+                  }}
+                  disabled={taskMode === "time"}
                 >
-                  <Text style={styles.pickerText}>{formatDate(deadlineDate)}</Text>
+                  <View
+                    style={[
+                      styles.allDayToggleKnob,
+                      hasDeadline && styles.allDayToggleKnobActive,
+                    ]}
+                  />
                 </Pressable>
               </View>
+
+              {hasDeadline ? (
+                <>
+                  <View style={styles.line} />
+                  <View style={styles.row}>
+                    <Text style={styles.label}>
+                      {taskMode === "time"
+                        ? text("Final plan date", "วันสุดท้ายของแผน")
+                        : text("Deadline", "กำหนดส่ง")}
+                    </Text>
+
+                    <Pressable
+                      style={styles.deadlineBox}
+                      onPress={() => openPicker("deadline", "date")}
+                    >
+                      <Text style={styles.pickerText}>{formatDate(deadlineDate)}</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : null}
             </SectionCard>
 
             <SectionCard
@@ -1605,45 +1738,64 @@ export default function EditTask() {
 
               {repeatDropdownOpen && repeatType === RECURRENCE_TYPES.WEEKLY && (
                 <>
-                  <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>ทำซ้ำทุก</Text>
+                  <View style={styles.intervalStepperRow}>
+                    <Text style={styles.intervalStepperLabel}>ทำซ้ำทุก</Text>
 
-                    <TextInput
-                      style={styles.numberInput}
-                      value={String(weekInterval)}
-                      onChangeText={(value) =>
-                        handlePositiveNumberChange(value, setWeekInterval, 12)
-                      }
-                      keyboardType="number-pad"
-                      placeholder="1"
-                      placeholderTextColor={COLORS.textMuted}
-                      maxLength={2}
-                    />
-
-                    <Text style={styles.smallLabel}>สัปดาห์</Text>
-                  </View>
-
-                  <View style={styles.customDayContainer}>
-                    {weekIntervalOptions.map((week) => (
+                    <View style={styles.intervalStepperControls}>
                       <Pressable
-                        key={week}
                         style={[
-                          styles.dayButton,
-                          Number(weekInterval) === week && styles.dayButtonActive,
+                          styles.intervalStepperButton,
+                          (Number(weekInterval) || 1) <= 1 &&
+                            styles.intervalStepperButtonDisabled,
                         ]}
-                        onPress={() => setWeekInterval(week)}
+                        disabled={(Number(weekInterval) || 1) <= 1}
+                        onPress={() =>
+                          setWeekInterval((current) =>
+                            Math.max(1, (Number(current) || 1) - 1)
+                          )
+                        }
                       >
-                        <Text
-                          style={[
-                            styles.dayButtonText,
-                            Number(weekInterval) === week &&
-                            styles.dayButtonTextActive,
-                          ]}
-                        >
-                          {week}
-                        </Text>
+                        <Ionicons
+                          name="remove"
+                          size={20}
+                          color={
+                            (Number(weekInterval) || 1) <= 1
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
                       </Pressable>
-                    ))}
+
+                      <View style={styles.intervalStepperValueBox}>
+                        <Text style={styles.intervalStepperValue}>
+                          {Math.min(12, Math.max(1, Number(weekInterval) || 1))} สัปดาห์
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        style={[
+                          styles.intervalStepperButton,
+                          (Number(weekInterval) || 1) >= 12 &&
+                            styles.intervalStepperButtonDisabled,
+                        ]}
+                        disabled={(Number(weekInterval) || 1) >= 12}
+                        onPress={() =>
+                          setWeekInterval((current) =>
+                            Math.min(12, (Number(current) || 1) + 1)
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name="add"
+                          size={20}
+                          color={
+                            (Number(weekInterval) || 1) >= 12
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
+                      </Pressable>
+                    </View>
                   </View>
 
                   <Text style={styles.subSectionTitle}>ทำซ้ำในวัน</Text>
@@ -1678,45 +1830,64 @@ export default function EditTask() {
 
               {repeatDropdownOpen && repeatType === RECURRENCE_TYPES.MONTHLY && (
                 <>
-                  <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>ทำซ้ำทุก</Text>
+                  <View style={styles.intervalStepperRow}>
+                    <Text style={styles.intervalStepperLabel}>ทำซ้ำทุก</Text>
 
-                    <TextInput
-                      style={styles.numberInput}
-                      value={String(monthInterval)}
-                      onChangeText={(value) =>
-                        handlePositiveNumberChange(value, setMonthInterval, 12)
-                      }
-                      keyboardType="number-pad"
-                      placeholder="1"
-                      placeholderTextColor={COLORS.textMuted}
-                      maxLength={2}
-                    />
-
-                    <Text style={styles.smallLabel}>เดือน</Text>
-                  </View>
-
-                  <View style={styles.customDayContainer}>
-                    {monthIntervalOptions.map((month) => (
+                    <View style={styles.intervalStepperControls}>
                       <Pressable
-                        key={month}
                         style={[
-                          styles.dayButton,
-                          Number(monthInterval) === month && styles.dayButtonActive,
+                          styles.intervalStepperButton,
+                          (Number(monthInterval) || 1) <= 1 &&
+                            styles.intervalStepperButtonDisabled,
                         ]}
-                        onPress={() => setMonthInterval(month)}
+                        disabled={(Number(monthInterval) || 1) <= 1}
+                        onPress={() =>
+                          setMonthInterval((current) =>
+                            Math.max(1, (Number(current) || 1) - 1)
+                          )
+                        }
                       >
-                        <Text
-                          style={[
-                            styles.dayButtonText,
-                            Number(monthInterval) === month &&
-                            styles.dayButtonTextActive,
-                          ]}
-                        >
-                          {month}
-                        </Text>
+                        <Ionicons
+                          name="remove"
+                          size={20}
+                          color={
+                            (Number(monthInterval) || 1) <= 1
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
                       </Pressable>
-                    ))}
+
+                      <View style={styles.intervalStepperValueBox}>
+                        <Text style={styles.intervalStepperValue}>
+                          {Math.min(12, Math.max(1, Number(monthInterval) || 1))} เดือน
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        style={[
+                          styles.intervalStepperButton,
+                          (Number(monthInterval) || 1) >= 12 &&
+                            styles.intervalStepperButtonDisabled,
+                        ]}
+                        disabled={(Number(monthInterval) || 1) >= 12}
+                        onPress={() =>
+                          setMonthInterval((current) =>
+                            Math.min(12, (Number(current) || 1) + 1)
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name="add"
+                          size={20}
+                          color={
+                            (Number(monthInterval) || 1) >= 12
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
+                      </Pressable>
+                    </View>
                   </View>
 
                   <View style={styles.inputRow}>
@@ -1849,17 +2020,6 @@ export default function EditTask() {
         </Pressable>
       </ScrollView>
 
-      <TimePickerModal
-        visible={timePickerVisible}
-        title={
-          timePickerTarget === "start"
-            ? text("Select start time", "เลือกเวลาเริ่ม")
-            : text("Select end time", "เลือกเวลาสิ้นสุด")
-        }
-        initialDate={getPickerValue(timePickerTarget)}
-        onClose={closeTimePicker}
-        onConfirm={handleConfirmTime}
-      />
 
       <Modal
         visible={editScopeModalVisible}
@@ -2483,6 +2643,52 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
+  intervalStepperRow: {
+    paddingVertical: 14,
+    gap: 10,
+  },
+  intervalStepperLabel: {
+    fontSize: 17,
+    color: COLORS.text,
+    fontWeight: "700",
+  },
+  intervalStepperControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  intervalStepperButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primaryLight,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  intervalStepperButtonDisabled: {
+    opacity: 0.4,
+    backgroundColor: COLORS.cardSoft,
+    borderColor: COLORS.border,
+  },
+  intervalStepperValueBox: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.cardSoft,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+  },
+  intervalStepperValue: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: COLORS.text,
+    textAlign: "center",
+  },
   customDayContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -2771,6 +2977,24 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: COLORS.text,
   },
+  deadlineTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  deadlineHelperText: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 17,
+    color: COLORS.textMuted,
+    fontWeight: "600",
+  },
+  infoButtonSmall: {
+    width: 22,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   allDayToggle: {
     width: 52,
     height: 30,
@@ -2782,6 +3006,9 @@ const styles = StyleSheet.create({
 
   allDayToggleActive: {
     backgroundColor: COLORS.primary,
+  },
+  toggleDisabled: {
+    opacity: 0.65,
   },
 
   allDayToggleKnob: {

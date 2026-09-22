@@ -1,9 +1,21 @@
 ﻿import { Ionicons } from "@expo/vector-icons";
-import { useRootNavigationState, useRouter } from "expo-router";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import {
+  useFocusEffect,
+  useRootNavigationState,
+  useRouter
+} from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
+  AppState,
   Modal,
   Pressable,
   ScrollView,
@@ -16,6 +28,13 @@ import BottomNav from "../src/components/BottomNav";
 import { auth } from "../src/config/firebase";
 import { COLORS } from "../src/constants/theme";
 import { useLanguage } from "../src/i18n/LanguageContext";
+import {
+  listenExternalEvents,
+} from "../src/services/externalEventService";
+import {
+  syncGoogleCalendarEvents,
+  syncUrlistTasksToGoogleCalendar,
+} from "../src/services/googleCalendarService";
 import {
   deletePlanningTaskWithSessions,
   deleteRecurringTaskGroup,
@@ -30,6 +49,9 @@ import {
 const TIMELINE_BASE_START_HOUR = 4;
 const TIMELINE_BASE_END_HOUR = 23;
 const HOUR_HEIGHT = 74;
+const GOOGLE_SYNC_FOCUS_COOLDOWN_MS = 60 * 1000;
+const GOOGLE_SYNC_INTERVAL_MS = 2 * 60 * 1000;
+let automaticGoogleSyncPromise = null;
 
 const MONTHS_EN = [
   { label: "Jan", value: 0 },
@@ -82,6 +104,14 @@ const UI = {
 };
 
 const STATUS_STYLES = {
+  googleCalendar: {
+    backgroundColor: "#E8F0FE",
+    borderColor: "#4285F4",
+    textColor: "#174EA6",
+    icon: "logo-google",
+    labelEn: "Google Calendar",
+    labelTh: "Google Calendar",
+  },
   normal: {
     backgroundColor: "#EAF4FF",
     borderColor: UI.primary,
@@ -253,22 +283,49 @@ const isOverdueTask = (task) => {
 };
 
 const getTaskVisualStyle = (task) => {
-  if (isCompletedLateTask(task)) return STATUS_STYLES.completedLate;
-  if (task?.is_completed) return STATUS_STYLES.completed;
-  if (isOverdueTask(task)) return STATUS_STYLES.overdue;
-  if (task?.has_conflict) return STATUS_STYLES.conflict;
+  if (task?.is_external_event) {
+    return STATUS_STYLES.googleCalendar;
+  }
+
+  if (isCompletedLateTask(task)) {
+    return STATUS_STYLES.completedLate;
+  }
+
+  if (task?.is_completed) {
+    return STATUS_STYLES.completed;
+  }
+
+  if (isOverdueTask(task)) {
+    return STATUS_STYLES.overdue;
+  }
+
+  if (task?.has_conflict) {
+    return STATUS_STYLES.conflict;
+  }
+
   if (task?.is_generated_session || task?.planning_enabled) {
     return STATUS_STYLES.planning;
   }
 
-  const priority = String(task?.priority || "normal").toLowerCase();
+  const priority = String(
+    task?.priority || "normal"
+  ).toLowerCase();
 
-  if (priority === "high") return STATUS_STYLES.high;
-  if (priority === "medium") return STATUS_STYLES.medium;
-  if (priority === "low") return STATUS_STYLES.low;
+  if (priority === "high") {
+    return STATUS_STYLES.high;
+  }
+
+  if (priority === "medium") {
+    return STATUS_STYLES.medium;
+  }
+
+  if (priority === "low") {
+    return STATUS_STYLES.low;
+  }
 
   return STATUS_STYLES.normal;
 };
+
 
 const isSameCalendarDay = (startValue, endValue) => {
   const startDate = normalizeDate(startValue);
@@ -334,7 +391,15 @@ export default function Calendar() {
   const [selectedDate, setSelectedDate] = useState(today);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [externalEvents, setExternalEvents] = useState([]);
+  const lastAutoGoogleSyncAtRef = useRef(0);
+  const appStateRef = useRef(AppState.currentState);
 
+  const googleCalendarStatusKey = useMemo(
+    () =>
+      `google_calendar_connected_${user?.uid || "guest"}`,
+    [user?.uid]
+  );
   const [user, setUser] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
@@ -416,12 +481,12 @@ export default function Calendar() {
 
   const getRepeatLabel = (task) => {
     if (task?.is_generated_session) {
-      return text("Planning Session", "เซสชันวางแผน");
+      return text("Planning Session", "กิจกรรมย่อยวางแผน");
     }
 
     if (task?.planning_enabled) {
       return `${task.planned_completed_count || 0}/${task.planned_session_count || 0
-        } ${text("sessions", "เซสชัน")}`;
+        } ${text("sessions", "กิจกรรมย่อย")}`;
     }
 
     if (!task?.is_recurring) {
@@ -515,6 +580,7 @@ export default function Calendar() {
 
     if (!user) {
       setTasks([]);
+      setExternalEvents([]);
       router.replace("/login");
     }
   }, [rootNavigationState?.key, isAuthReady, user, router]);
@@ -524,6 +590,7 @@ export default function Calendar() {
 
     if (!user?.uid) {
       setTasks([]);
+      setExternalEvents([]);
       return;
     }
 
@@ -553,6 +620,161 @@ export default function Calendar() {
       }
     };
   }, [isAuthReady, user?.uid, router, text]);
+  useEffect(() => {
+    if (!isAuthReady) return;
+
+    if (!user?.uid) {
+      setExternalEvents([]);
+      return;
+    }
+
+    let unsubscribe = () => { };
+
+    try {
+      unsubscribe = listenExternalEvents((data) => {
+        const googleEvents = Array.isArray(data)
+          ? data.filter(
+            (event) =>
+              event?.source === "google_calendar" &&
+              event?.status !== "cancelled"
+          )
+          : [];
+
+        setExternalEvents(googleEvents);
+      });
+    } catch (error) {
+      console.error(
+        "Listen Google Calendar events error:",
+        error
+      );
+
+      if (error?.message === "AUTH_REQUIRED") {
+        router.replace("/login");
+        return;
+      }
+
+      Alert.alert(
+        text("Error", "เกิดข้อผิดพลาด"),
+        text(
+          "Unable to load Google Calendar events.",
+          "ไม่สามารถโหลดกิจกรรมจาก Google Calendar ได้"
+        )
+      );
+    }
+
+    return () => {
+      if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    };
+  }, [isAuthReady, user?.uid, router, text]);
+
+
+  // วางข้อ 3.8 ตรงนี้
+
+  const runAutomaticGoogleCalendarSync = useCallback(async () => {
+    if (!isAuthReady || !user?.uid) {
+      return Promise.resolve(null);
+    }
+    const googleUser = GoogleSignin.getCurrentUser();
+
+    if (!googleUser) {
+      console.log(
+        "AUTO GOOGLE SYNC SKIPPED: GOOGLE CALENDAR DISCONNECTED"
+      );
+
+      return Promise.resolve(null);
+    }
+
+    // ถ้ามี Sync กำลังทำงานอยู่ ให้ใช้ Promise เดิม
+    // ห้ามเริ่ม Sync ชุดใหม่ซ้อนกัน
+    if (automaticGoogleSyncPromise) {
+      console.log("AUTO GOOGLE SYNC ALREADY RUNNING");
+      return automaticGoogleSyncPromise;
+    }
+
+    automaticGoogleSyncPromise = (async () => {
+      try {
+        console.log("AUTO GOOGLE SYNC START");
+
+        const importedResult =
+          await syncGoogleCalendarEvents({
+            daysBack: 30,
+            daysForward: 120,
+            clearOldEvents: true,
+            syncAllCalendars: true,
+            silent: true,
+          });
+
+        const exportedResult =
+          await syncUrlistTasksToGoogleCalendar({
+            calendarId: "primary",
+            silent: true,
+          });
+
+        console.log("AUTO GOOGLE SYNC SUCCESS", {
+          importedFromGoogle:
+            importedResult.synced_count,
+          exportedCreated:
+            exportedResult.created_count,
+          exportedUpdated:
+            exportedResult.updated_count,
+          exportedDeleted:
+            exportedResult.deleted_count,
+          exportedSkipped:
+            exportedResult.skipped_count,
+          exportedFailed:
+            exportedResult.failed_count,
+        });
+
+        return {
+          importedResult,
+          exportedResult,
+        };
+      } catch (error) {
+        const errorMessage = String(error?.message || "");
+
+        const isGoogleDisconnected =
+          errorMessage.includes("requires a user to be signed in") ||
+          errorMessage.includes("SIGN_IN_REQUIRED");
+
+        if (isGoogleDisconnected) {
+          console.log(
+            "AUTO GOOGLE SYNC SKIPPED: GOOGLE CALENDAR DISCONNECTED"
+          );
+
+          return null;
+        }
+
+        console.error(
+          "AUTO GOOGLE SYNC ERROR:",
+          error?.message,
+          error
+        );
+
+        return null;
+      } finally {
+        automaticGoogleSyncPromise = null;
+      }
+    })();
+
+    return automaticGoogleSyncPromise;
+  }, [isAuthReady, user?.uid]);
+
+  // วางก้อนนี้ต่อทันที
+  useFocusEffect(
+    useCallback(() => {
+      void runAutomaticGoogleCalendarSync();
+
+      const intervalId = setInterval(() => {
+        void runAutomaticGoogleCalendarSync();
+      }, GOOGLE_SYNC_INTERVAL_MS);
+
+      return () => {
+        clearInterval(intervalId);
+      };
+    }, [runAutomaticGoogleCalendarSync])
+  );
 
   const ensureLoggedIn = () => {
     if (!auth.currentUser) {
@@ -1064,7 +1286,7 @@ export default function Calendar() {
         text("Error", "เกิดข้อผิดพลาด"),
         text(
           "Unable to delete planning task and sessions.",
-          "ไม่สามารถลบกิจกรรมแบบวางแผนและเซสชันย่อยได้"
+          "ไม่สามารถลบกิจกรรมแบบวางแผนและกิจกรรมย่อยได้"
         )
       );
     } finally {
@@ -1082,7 +1304,7 @@ export default function Calendar() {
     }
 
     if (deleteTargetTask.is_generated_session) {
-      return text("Delete Planning Session", "ลบเซสชันวางแผน");
+      return text("Delete Planning Session", "ลบกิจกรรมย่อยวางแผน");
     }
 
     if (deleteTargetTask.is_recurring) {
@@ -1098,14 +1320,14 @@ export default function Calendar() {
     if (deleteTargetTask.planning_enabled) {
       return text(
         "This task has generated planning sessions. What do you want to delete?",
-        "กิจกรรมนี้มีเซสชันย่อยที่ระบบสร้างไว้ ต้องการลบแบบใด?"
+        "กิจกรรมนี้มีกิจกรรมย่อยที่ระบบสร้างไว้ ต้องการลบแบบใด?"
       );
     }
 
     if (deleteTargetTask.is_generated_session) {
       return text(
         "This is a generated planning session. Do you want to delete only this session?",
-        "นี่คือเซสชันวางแผนที่ระบบสร้างขึ้น ต้องการลบเฉพาะเซสชันนี้หรือไม่?"
+        "นี่คือกิจกรรมย่อยวางแผนที่ระบบสร้างขึ้น ต้องการลบเฉพาะกิจกรรมย่อยนี้หรือไม่?"
       );
     }
 
@@ -1125,9 +1347,43 @@ export default function Calendar() {
   const monthDays = useMemo(() => {
     return buildMonthDays(year, month);
   }, [year, month]);
+  const googleCalendarItems = useMemo(() => {
+    return externalEvents.map((event) => ({
+      ...event,
+
+      id: event.id,
+      title: event.title || "Google Calendar Event",
+      detail: event.description || "",
+
+      start_time: event.start_time,
+      end_time: event.end_time,
+
+      task_type: event.event_type || "busy",
+      priority: event.event_type === "exam" ? "High" : "Medium",
+
+      is_external_event: true,
+
+      // เก็บค่าจริงจาก Google
+      // false = แสดงบนปฏิทิน แต่ไม่ใช้บล็อกเวลาว่าง
+      is_busy_time: event.is_busy_time !== false,
+
+      source: event.source || "google_calendar",
+      event_type: event.event_type || "busy",
+
+      is_completed: false,
+      has_conflict: false,
+
+      location: event.location || "",
+    }));
+  }, [externalEvents]);
+
+  const calendarItems = useMemo(() => {
+    return [...tasks, ...googleCalendarItems];
+  }, [tasks, googleCalendarItems]);
+
 
   const tasksForDay = (date, includeCompleted = true) => {
-    return tasks
+    return calendarItems
       .filter((task) => {
         if (!task) return false;
 
@@ -1154,7 +1410,7 @@ export default function Calendar() {
 
   const selectedDayTasks = useMemo(() => {
     return tasksForDay(selectedDate, true);
-  }, [tasks, selectedDate]);
+  }, [calendarItems, selectedDate]);
 
   const selectedTask = useMemo(() => {
     return selectedDayTasks.find((task) => task.id === selectedTaskId) || null;
@@ -1381,6 +1637,11 @@ export default function Calendar() {
         style={styles.content}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
+        overScrollMode="never"
+        bounces={false}
+        alwaysBounceVertical={false}
+        alwaysBounceHorizontal={false}
+
       >
         <View style={styles.headerCard}>
           <View style={styles.headerTopRow}>
@@ -1581,6 +1842,16 @@ export default function Calendar() {
                     </Text>
                   </View>
 
+                  {!selectedTask.is_external_event ? (
+                    <View style={styles.infoTag}>
+                      <Text style={styles.infoTagText}>
+                        {text("Deadline", "กำหนดส่ง")}: {selectedTask.deadline
+                          ? formatFullDate(selectedTask.deadline)
+                          : text("No deadline", "ไม่มีกำหนด")}
+                      </Text>
+                    </View>
+                  ) : null}
+
                   {selectedTask.has_conflict ? (
                     <View style={[styles.infoTag, styles.conflictInfoTag]}>
                       <Text style={styles.conflictInfoText}>
@@ -1590,7 +1861,9 @@ export default function Calendar() {
                   ) : null}
                 </View>
 
-                {isOverdueTask(selectedTask) && !selectedTask.is_completed ? (
+                {!selectedTask.is_external_event &&
+                  isOverdueTask(selectedTask) &&
+                  !selectedTask.is_completed ? (
                   <Pressable
                     style={styles.modalRescheduleButton}
                     onPress={() => {
@@ -1610,63 +1883,81 @@ export default function Calendar() {
                   </Pressable>
                 ) : null}
 
-                <View style={styles.selectedTaskActionRow}>
-                  {selectedTask.is_completed ? (
+                {selectedTask.is_external_event ? (
+                  <View style={styles.externalReadOnlyBox}>
+                    <Ionicons
+                      name="lock-closed-outline"
+                      size={18}
+                      color="#174EA6"
+                    />
+
+                    <Text style={styles.externalReadOnlyText}>
+                      {text(
+                        "Imported from Google Calendar. This event is read-only in Urlist.",
+                        "นำเข้าจาก Google Calendar กิจกรรมนี้แสดงแบบอ่านอย่างเดียวใน Urlist"
+                      )}
+                    </Text>
+                  </View>
+                ) : (
+
+                  <View style={styles.selectedTaskActionRow}>
+                    {selectedTask.is_completed ? (
+                      <Pressable
+                        style={styles.undoButton}
+                        onPress={() => {
+                          handleUndoCompletedTask(selectedTask.id);
+                          setSelectedTaskId(null);
+                        }}
+                      >
+                        <Ionicons name="refresh-outline" size={18} color={UI.text} />
+                        <Text style={styles.undoButtonText}>
+                          {text("Undo", "ย้อนกลับ")}
+                        </Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable
+                        style={styles.doneButton}
+                        onPress={() => {
+                          handleDoneTask(selectedTask.id);
+                          setSelectedTaskId(null);
+                        }}
+                      >
+                        <Ionicons name="checkmark" size={18} color={UI.textLight} />
+                        <Text style={styles.doneButtonText}>
+                          {text("Done", "เสร็จแล้ว")}
+                        </Text>
+                      </Pressable>
+                    )}
+
                     <Pressable
-                      style={styles.undoButton}
+                      style={styles.editButton}
                       onPress={() => {
-                        handleUndoCompletedTask(selectedTask.id);
+                        const taskToEdit = selectedTask;
                         setSelectedTaskId(null);
+                        handleEditTask(taskToEdit);
                       }}
                     >
-                      <Ionicons name="refresh-outline" size={18} color={UI.text} />
-                      <Text style={styles.undoButtonText}>
-                        {text("Undo", "ย้อนกลับ")}
+                      <Ionicons name="create-outline" size={18} color={UI.textLight} />
+                      <Text style={styles.editButtonText}>
+                        {text("Edit", "แก้ไข")}
                       </Text>
                     </Pressable>
-                  ) : (
+
                     <Pressable
-                      style={styles.doneButton}
+                      style={styles.deleteButton}
                       onPress={() => {
-                        handleDoneTask(selectedTask.id);
+                        const taskToDelete = selectedTask;
                         setSelectedTaskId(null);
+                        openDeleteModal(taskToDelete);
                       }}
                     >
-                      <Ionicons name="checkmark" size={18} color={UI.textLight} />
-                      <Text style={styles.doneButtonText}>
-                        {text("Done", "เสร็จแล้ว")}
+                      <Ionicons name="trash-outline" size={18} color={UI.textLight} />
+                      <Text style={styles.deleteButtonText}>
+                        {text("Delete", "ลบ")}
                       </Text>
                     </Pressable>
-                  )}
-
-                  <Pressable
-                    style={styles.editButton}
-                    onPress={() => {
-                      const taskToEdit = selectedTask;
-                      setSelectedTaskId(null);
-                      handleEditTask(taskToEdit);
-                    }}
-                  >
-                    <Ionicons name="create-outline" size={18} color={UI.textLight} />
-                    <Text style={styles.editButtonText}>
-                      {text("Edit", "แก้ไข")}
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={styles.deleteButton}
-                    onPress={() => {
-                      const taskToDelete = selectedTask;
-                      setSelectedTaskId(null);
-                      openDeleteModal(taskToDelete);
-                    }}
-                  >
-                    <Ionicons name="trash-outline" size={18} color={UI.textLight} />
-                    <Text style={styles.deleteButtonText}>
-                      {text("Delete", "ลบ")}
-                    </Text>
-                  </Pressable>
-                </View>
+                  </View>
+                )}
               </View>
             ) : null}
           </Pressable>
@@ -2057,7 +2348,7 @@ export default function Calendar() {
                   <Text style={styles.modalButtonText}>
                     {text(
                       "Delete main task and all sessions",
-                      "ลบกิจกรรมหลักและเซสชันทั้งหมด"
+                      "ลบกิจกรรมหลักและกิจกรรมย่อยทั้งหมด"
                     )}
                   </Text>
                 </Pressable>
@@ -2203,7 +2494,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   contentContainer: {
-    paddingTop: 58,
+    paddingTop: 22,
     paddingHorizontal: 18,
     paddingBottom: 170,
   },
@@ -2588,6 +2879,26 @@ const styles = StyleSheet.create({
     color: "#991B1B",
     fontSize: 12,
     fontWeight: "900",
+  },
+  externalReadOnlyBox: {
+    marginTop: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#AECBFA",
+    backgroundColor: "#E8F0FE",
+  },
+
+  externalReadOnlyText: {
+    flex: 1,
+    color: "#174EA6",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
   },
 
   selectedTaskActionRow: {

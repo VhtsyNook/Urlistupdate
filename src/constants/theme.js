@@ -11,12 +11,22 @@ export const COLORS = {
   cardSoft: "#F9F9FB",
 
   // Text
+  /*
   text: "#111111",
   textPrimary: "#111111",
   textSecondary: "#3C3C43",
   textMuted: "#8E8E93",
-  textLight: "#FFFFFF",
+  textLight: "#FFFFFF",*/
 
+  // Typography
+  textStrong: "#1E3A5F",   // หัวข้อใหญ่
+  text: "#334E68",         // ข้อความทั่วไป
+  textPrimary: "#334E68",  // รองรับโค้ดเดิม
+  textSecondary: "#6B7C93",// รองรับโค้ดเดิม
+  textMuted: "#6B7C93",    // คำอธิบาย
+  textSoft: "#94A3B8",     // placeholder / ข้อมูลรอง
+  textAccent: "#2563EB",   // ข้อความที่เน้น
+  textLight: "#FFFFFF",
   // Border / Divider
   border: "#E5E5EA",
   divider: "#D1D1D6",

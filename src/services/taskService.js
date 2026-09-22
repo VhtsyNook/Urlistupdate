@@ -1,4 +1,4 @@
-﻿import {
+import {
   collection,
   deleteDoc,
   doc,
@@ -14,6 +14,9 @@
 } from "firebase/firestore";
 
 import { auth, db } from "../config/firebase";
+import {
+  deleteGoogleCalendarEvent,
+} from "./googleCalendarService";
 
 
 const DEFAULT_REPEAT_COUNT = 60; //จำนวนครั้งสูงสุดที่ระบบจะสร้างงานซ้ำล่วงหน้า
@@ -22,6 +25,46 @@ const AUTO_SCHEDULE_DAY_START_HOUR = 6; //เวลาเริ่มต้น�
 const AUTO_SCHEDULE_DAY_END_HOUR = 23; //เวลาสิ้นสุดของช่วงวันที่ระบบใช้สำหรับจัดตารางอัตโนมัติ
 const ALL_DAY_START_HOUR = 4; //เริ่มต้นทั้งวันตอน ตี 4 
 const ALL_DAY_END_HOUR = 23; // ถึง ตี 5
+
+const deleteLinkedGoogleCalendarEvent = async (task) => {
+  if (!task?.google_event_id) {
+    return;
+  }
+
+  try {
+    await deleteGoogleCalendarEvent(
+      task.google_event_id,
+      {
+        calendarId:
+          task.google_calendar_id || "primary",
+        silent: true,
+      }
+    );
+  } catch (error) {
+    // Google Event ถูกลบไปแล้ว
+    if (
+      error?.status === 404 ||
+      error?.status === 410
+    ) {
+      return;
+    }
+
+    // Google Calendar ไม่ได้เชื่อมอยู่
+    // ให้ลบใน Urlist ต่อได้ ไม่ต้องหยุดการทำงาน
+    if (
+      error?.message === "GOOGLE_CALENDAR_NOT_CONNECTED" ||
+      error?.message === "GOOGLE_RELOGIN_REQUIRED"
+    ) {
+      console.log(
+        "SKIP GOOGLE EVENT DELETE:",
+        error?.message
+      );
+      return;
+    }
+
+    throw error;
+  }
+};
 
 const getCurrentUser = () => {
   const user = auth.currentUser;
@@ -288,7 +331,7 @@ const buildWeeklyOccurrenceStarts = ({
         starts.push(candidateStart);
       }
     });
-//เลื่อนไปสัปดาห์ถัดไป หรือข้ามทุกกี่สัปดาห์ตามที่ผู้ใช้เลือก
+    //เลื่อนไปสัปดาห์ถัดไป หรือข้ามทุกกี่สัปดาห์ตามที่ผู้ใช้เลือก
     weekCursor = addDays(weekCursor, 7 * weekInterval);
   }
 
@@ -312,7 +355,7 @@ const buildMonthlyOccurrenceStarts = ({
       candidate.getMonth() + 1,
       0
     ).getDate();
-//ถ้าเลือกวันที่ 31 แต่เดือนนั้นมีแค่ 30 หรือ 28 วัน ระบบจะใช้วันสุดท้ายของเดือนแทน
+    //ถ้าเลือกวันที่ 31 แต่เดือนนั้นมีแค่ 30 หรือ 28 วัน ระบบจะใช้วันสุดท้ายของเดือนแทน
     candidate.setDate(Math.min(monthDay, lastDayOfMonth));
     candidate.setHours(
       startDate.getHours(),
@@ -910,35 +953,92 @@ const buildDefaultPlanningSessionStart = ({
   return sessionStart;
 };
 
-const buildPlanningSessions = (task, parentTaskId, options = {}) => {
-  const { existingTasks = [] } = options;
-  const { userId, email } = getCurrentUser();
+const normalizePlanningTaskRules = (task) => ({
+  ...task,
 
-  const title = task.title?.trim() || "Untitled Task";
-  const detail = task.detail || "";
+  // วันสุดท้ายของแผนสามารถนำมาใช้จัดกิจกรรมได้
+  plan_before_deadline_days: 0,
 
+  // Planning Mode ต้องหลีกเลี่ยงกิจกรรมเดิมเสมอ
+  auto_schedule: true,
+
+  // Planning Mode รุ่นปัจจุบันไม่สร้างรอบทบทวน
+  add_review_session: false,
+});
+
+const getLocalDateKey = (date) => {
+  const value = toDate(date);
+
+  if (!isValidDate(value)) return "";
+
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
+
+const roundUpToMinutesStep = (date, stepMinutes = 15) => {
+  const roundedDate = new Date(date);
+
+  roundedDate.setSeconds(0, 0);
+
+  const minutes = roundedDate.getMinutes();
+  const remainder = minutes % stepMinutes;
+
+  if (remainder !== 0) {
+    roundedDate.setMinutes(minutes + (stepMinutes - remainder));
+  }
+
+  return roundedDate;
+};
+
+const getPlanningSessionDurations = (
+  totalPlannedMinutes,
+  sessionDurationMinutes
+) => {
+  const durations = [];
+  let remainingMinutes = totalPlannedMinutes;
+
+  while (remainingMinutes > 0) {
+    const currentDuration = Math.min(
+      sessionDurationMinutes,
+      remainingMinutes
+    );
+
+    durations.push(currentDuration);
+    remainingMinutes -= currentDuration;
+  }
+
+  return durations;
+};
+
+const getPlanningConfiguration = (task) => {
   const startDate = toDate(task.start_time) || new Date();
   const deadlineDate = task.deadline ? toDate(task.deadline) : null;
 
-  if (!deadlineDate || !isValidDate(deadlineDate)) {
-    return [];
+  if (!isValidDate(startDate)) {
+    throw new Error("PLANNING_INVALID_START_DATE");
   }
 
-  const priority = normalizePriority(task.priority);
+  if (!isValidDate(deadlineDate)) {
+    throw new Error("PLANNING_DEADLINE_REQUIRED");
+  }
 
-  const totalPlannedMinutes = normalizeNumber(task.total_planned_minutes, 600);
+  const totalPlannedMinutes = normalizeNumber(
+    task.total_planned_minutes,
+    600
+  );
+
   const sessionDurationMinutes = normalizeNumber(
     task.session_duration_minutes,
     60
   );
 
-  const planBeforeDeadlineDays = Number(task.plan_before_deadline_days || 0);
-  const sessionCount = Math.ceil(totalPlannedMinutes / sessionDurationMinutes);
-
-  const reviewSessionCount = task.add_review_session === true ? 1 : 0;
-  const generatedSessionTotal = sessionCount + reviewSessionCount;
-
-  const preferredStudyWindow = task.preferred_study_window || "evening";
+  const sessionDurations = getPlanningSessionDurations(
+    totalPlannedMinutes,
+    sessionDurationMinutes
+  );
 
   const preferredStartHour = Number.isFinite(
     Number(task.preferred_study_start_hour)
@@ -964,344 +1064,743 @@ const buildPlanningSessions = (task, parentTaskId, options = {}) => {
     ? Number(task.preferred_study_end_minute)
     : 0;
 
-  const safeStartHour = Math.max(4, Math.min(22, preferredStartHour));
-  const safeStartMinute = Math.max(0, Math.min(59, preferredStartMinute));
+  const safeStartHour = Math.max(
+    0,
+    Math.min(23, preferredStartHour)
+  );
+
+  const safeStartMinute = Math.max(
+    0,
+    Math.min(59, preferredStartMinute)
+  );
 
   const safeEndHour = Math.max(
-    safeStartHour + 1,
+    0,
     Math.min(23, preferredEndHour)
   );
-  const safeEndMinute = Math.max(0, Math.min(59, preferredEndMinute));
+
+  const safeEndMinute = Math.max(
+    0,
+    Math.min(59, preferredEndMinute)
+  );
+
+  const preferredStartTotalMinutes =
+    safeStartHour * 60 + safeStartMinute;
+
+  const preferredEndTotalMinutes =
+    safeEndHour * 60 + safeEndMinute;
+
+  if (preferredEndTotalMinutes <= preferredStartTotalMinutes) {
+    throw new Error("PLANNING_INVALID_PREFERRED_TIME");
+  }
+
+  const startPlanningDay = getDayOnly(startDate);
+  const latestPlanningDay = getDayOnly(deadlineDate);
+
+  const planBeforeDeadlineDays = Number(
+    task.plan_before_deadline_days || 0
+  );
+
+  latestPlanningDay.setDate(
+    latestPlanningDay.getDate() - planBeforeDeadlineDays
+  );
+
+  if (latestPlanningDay < startPlanningDay) {
+    throw new Error("PLANNING_INVALID_DATE_RANGE");
+  }
+
+  let planningWindowStart = new Date(startPlanningDay);
+  planningWindowStart.setHours(
+    safeStartHour,
+    safeStartMinute,
+    0,
+    0
+  );
+
+  if (startDate > planningWindowStart) {
+    planningWindowStart = new Date(startDate);
+  }
 
   const now = new Date();
 
-  const roundUpToNextStep = (date, stepMinutes = 15) => {
-    const roundedDate = new Date(date);
-
-    roundedDate.setSeconds(0);
-    roundedDate.setMilliseconds(0);
-
-    const minutes = roundedDate.getMinutes();
-    const remainder = minutes % stepMinutes;
-
-    if (remainder !== 0) {
-      roundedDate.setMinutes(minutes + (stepMinutes - remainder));
-    }
-
-    return roundedDate;
-  };
-
-  let planningWindowStart = new Date(startDate);
-  planningWindowStart.setSeconds(0, 0);
-
-  if (planningWindowStart < now) {
-    planningWindowStart = roundUpToNextStep(now, 15);
+  if (isSameDateOnly(startPlanningDay, now) && now > planningWindowStart) {
+    planningWindowStart = roundUpToMinutesStep(now, 15);
   }
 
-  let latestPlanningDate = new Date(deadlineDate);
-  latestPlanningDate.setDate(
-    latestPlanningDate.getDate() - planBeforeDeadlineDays
+  const latestPlanningDate = new Date(latestPlanningDay);
+  latestPlanningDate.setHours(
+    safeEndHour,
+    safeEndMinute,
+    0,
+    0
   );
-
-  const latestStudyWindowEnd = new Date(latestPlanningDate);
-  latestStudyWindowEnd.setHours(safeEndHour, safeEndMinute, 0, 0);
-
-  if (latestPlanningDate > latestStudyWindowEnd) {
-    latestPlanningDate = latestStudyWindowEnd;
-  }
 
   if (latestPlanningDate <= planningWindowStart) {
     throw new Error("PLANNING_NOT_ENOUGH_FREE_TIME");
   }
 
-  const shouldAutoAllocate = task.auto_schedule === true;
+  const planningDays = [];
+  let cursorDay = new Date(startPlanningDay);
 
-  const buildDailyPlanningWindow = (date) => {
-    const dayStart = new Date(date);
-    dayStart.setHours(safeStartHour, safeStartMinute, 0, 0);
+  while (cursorDay <= latestPlanningDay) {
+    planningDays.push(new Date(cursorDay));
+    cursorDay = addDays(cursorDay, 1);
+  }
 
-    const dayEnd = new Date(date);
-    dayEnd.setHours(safeEndHour, safeEndMinute, 0, 0);
-
-    const start =
-      dayStart < planningWindowStart ? new Date(planningWindowStart) : dayStart;
-
-    const end =
-      dayEnd > latestPlanningDate ? new Date(latestPlanningDate) : dayEnd;
-
-    if (start >= end) return null;
-
-    return {
-      start,
-      end,
-    };
+  return {
+    startDate,
+    deadlineDate,
+    startPlanningDay,
+    latestPlanningDay,
+    planningWindowStart,
+    latestPlanningDate,
+    planningDays,
+    totalPlannedMinutes,
+    sessionDurationMinutes,
+    sessionDurations,
+    sessionCount: sessionDurations.length,
+    preferredStudyWindow:
+      task.preferred_study_window || "custom",
+    safeStartHour,
+    safeStartMinute,
+    safeEndHour,
+    safeEndMinute,
+    planBeforeDeadlineDays,
   };
+};
 
-  const getBusySlotsForSessionSearch = ({
-    windowStart,
-    windowEnd,
-    generatedSessions,
-    avoidExistingTasks,
-  }) => {
-    const busySourceTasks = avoidExistingTasks ? existingTasks : [];
+const getPlanningDailyWindow = (date, config) => {
+  const dayStart = new Date(date);
+  dayStart.setHours(
+    config.safeStartHour,
+    config.safeStartMinute,
+    0,
+    0
+  );
 
-    const busyFromExisting = busySourceTasks
-      .map((item) => {
-        const itemStart = toDate(item.start_time);
-        const itemEnd = toDate(item.end_time);
+  const dayEnd = new Date(date);
+  dayEnd.setHours(
+    config.safeEndHour,
+    config.safeEndMinute,
+    0,
+    0
+  );
 
-        if (!isValidDate(itemStart) || !isValidDate(itemEnd)) return null;
-        if (item.is_completed === true) return null;
-        if (itemEnd <= windowStart || itemStart >= windowEnd) return null;
+  const start =
+    dayStart < config.planningWindowStart
+      ? new Date(config.planningWindowStart)
+      : dayStart;
 
-        return {
-          start_time: itemStart < windowStart ? new Date(windowStart) : itemStart,
-          end_time: itemEnd > windowEnd ? new Date(windowEnd) : itemEnd,
-        };
-      })
-      .filter(Boolean);
+  const end =
+    dayEnd > config.latestPlanningDate
+      ? new Date(config.latestPlanningDate)
+      : dayEnd;
 
-    const busyFromGenerated = generatedSessions
-      .map((session) => {
-        const sessionStart = toDate(session.start_time);
-        const sessionEnd = toDate(session.end_time);
+  if (start >= end) return null;
 
-        if (!isValidDate(sessionStart) || !isValidDate(sessionEnd)) return null;
-        if (sessionEnd <= windowStart || sessionStart >= windowEnd) return null;
-
-        return {
-          start_time:
-            sessionStart < windowStart ? new Date(windowStart) : sessionStart,
-          end_time: sessionEnd > windowEnd ? new Date(windowEnd) : sessionEnd,
-        };
-      })
-      .filter(Boolean);
-
-    //return mergeBusySlots([...busyFromExisting, ...busyFromGenerated]);ก่อนแก้ เว้น 12.00-13.00
-    const lunchStart = new Date(windowStart);
-    lunchStart.setHours(12, 0, 0, 0);
-
-    const lunchEnd = new Date(windowStart);
-    lunchEnd.setHours(13, 0, 0, 0);
-
-    const lunchBreakSlots =
-      lunchEnd <= windowStart || lunchStart >= windowEnd
-        ? []
-        : [
-          {
-            start_time:
-              lunchStart < windowStart ? new Date(windowStart) : lunchStart,
-            end_time: lunchEnd > windowEnd ? new Date(windowEnd) : lunchEnd,
-          },
-        ];
-
-    return mergeBusySlots([
-      ...busyFromExisting,
-      ...busyFromGenerated,
-      ...lunchBreakSlots,
-    ]);
+  return {
+    start,
+    end,
   };
+};
 
-  const findNextAvailableSessionStart = ({
-    durationMinutes,
-    generatedSessions,
-    avoidExistingTasks,
-    preferredFrom = planningWindowStart,
-  }) => {
-    let cursorDay = getDayOnly(preferredFrom);
-    const lastDay = getDayOnly(latestPlanningDate);
-
-    while (cursorDay <= lastDay) {
-      const dailyWindow = buildDailyPlanningWindow(cursorDay);
-
-      if (dailyWindow) {
-        let cursor =
-          dailyWindow.start < preferredFrom
-            ? new Date(preferredFrom)
-            : new Date(dailyWindow.start);
-
-        cursor = roundUpToNextStep(cursor, 15);
-
-        const busySlots = getBusySlotsForSessionSearch({
-          windowStart: dailyWindow.start,
-          windowEnd: dailyWindow.end,
-          generatedSessions,
-          avoidExistingTasks,
-        });
-
-        for (const busySlot of busySlots) {
-          const possibleEnd = addMinutes(cursor, durationMinutes);
-
-          if (possibleEnd <= busySlot.start_time && possibleEnd <= dailyWindow.end) {
-            return cursor;
-          }
-
-          if (busySlot.end_time > cursor) {
-            cursor = roundUpToNextStep(
-              addMinutes(busySlot.end_time, AUTO_SCHEDULE_BUFFER_MINUTES),
-              15
-            );
-          }
-        }
-
-        const possibleEnd = addMinutes(cursor, durationMinutes);
-
-        if (possibleEnd <= dailyWindow.end) {
-          return cursor;
-        }
+const getBusySlotsForPlanningDay = ({
+  existingTasks,
+  generatedSessions,
+  windowStart,
+  windowEnd,
+}) => {
+  const sourceItems = [
+    ...existingTasks.filter((task) => {
+      // Parent ของ Planning Mode ไม่ใช่ช่วงเวลาที่ผู้ใช้ต้องทำจริง
+      // ใช้กิจกรรมย่อยของแผนเป็น Busy Time แทน
+      if (
+        task.task_type === "planned_task" &&
+        task.planning_enabled === true
+      ) {
+        return false;
       }
 
-      cursorDay = addDays(cursorDay, 1);
+      return task.is_completed !== true;
+    }),
+    ...generatedSessions,
+  ];
+
+  const busySlots = sourceItems
+    .map((item) => {
+      const itemStart = toDate(item.start_time);
+      const itemEnd = toDate(item.end_time);
+
+      if (!isValidDate(itemStart) || !isValidDate(itemEnd)) {
+        return null;
+      }
+
+      if (itemEnd <= windowStart || itemStart >= windowEnd) {
+        return null;
+      }
+
+      // เว้นเวลา 15 นาทีทั้งก่อนและหลังกิจกรรม
+      const bufferedStart = addMinutes(
+        itemStart,
+        -AUTO_SCHEDULE_BUFFER_MINUTES
+      );
+
+      const bufferedEnd = addMinutes(
+        itemEnd,
+        AUTO_SCHEDULE_BUFFER_MINUTES
+      );
+
+      return {
+        start_time:
+          bufferedStart < windowStart
+            ? new Date(windowStart)
+            : bufferedStart,
+        end_time:
+          bufferedEnd > windowEnd
+            ? new Date(windowEnd)
+            : bufferedEnd,
+      };
+    })
+    .filter(Boolean);
+
+  return mergeBusySlots(busySlots);
+};
+
+const findAvailableStartInPlanningDay = ({
+  date,
+  durationMinutes,
+  config,
+  existingTasks,
+  generatedSessions,
+}) => {
+  const dailyWindow = getPlanningDailyWindow(date, config);
+
+  if (!dailyWindow) return null;
+
+  const busySlots = getBusySlotsForPlanningDay({
+    existingTasks,
+    generatedSessions,
+    windowStart: dailyWindow.start,
+    windowEnd: dailyWindow.end,
+  });
+
+  let cursor = roundUpToMinutesStep(
+    dailyWindow.start,
+    15
+  );
+
+  for (const busySlot of busySlots) {
+    const possibleEnd = addMinutes(
+      cursor,
+      durationMinutes
+    );
+
+    if (
+      possibleEnd <= busySlot.start_time &&
+      possibleEnd <= dailyWindow.end
+    ) {
+      return cursor;
     }
 
-    return null;
-  };
-
-  const buildSessionData = ({
-    sessionTitle,
-    sessionDetail,
-    sessionStart,
-    sessionEnd,
-    sessionDuration,
-    index,
-    taskType,
-    academicTaskType,
-    autoScheduled,
-  }) => {
-    return {
-      title: sessionTitle,
-      detail: sessionDetail,
-
-      user_id: userId,
-      user_email: email,
-
-      start_time: sessionStart,
-      end_time: sessionEnd,
-
-      task_type: taskType,
-      academic_task_type: academicTaskType,
-
-      priority,
-      deadline: deadlineDate,
-      estimated_duration_minutes: sessionDuration,
-
-      planning_enabled: false,
-      total_planned_minutes: null,
-      session_duration_minutes: sessionDuration,
-      plan_before_deadline_days: planBeforeDeadlineDays,
-      auto_schedule: task.auto_schedule || false,
-      auto_scheduled: autoScheduled,
-      add_review_session: false,
-      is_generated_session: true,
-      parent_task_id: parentTaskId,
-      planned_session_count: null,
-      planned_completed_count: 0,
-      generated_session_index: index,
-      generated_session_total: generatedSessionTotal,
-
-      preferred_study_window: preferredStudyWindow,
-      preferred_study_start_hour: safeStartHour,
-      preferred_study_start_minute: safeStartMinute,
-      preferred_study_end_hour: safeEndHour,
-      preferred_study_end_minute: safeEndMinute,
-
-      status: "active",
-      is_completed: false,
-
-      is_recurring: false,
-      recurrence_type: "none",
-      recurrence_interval_days: null,
-      recurrence_index: null,
-      recurrence_group_id: null,
-
-      completedAt: null,
-      completed_at: null,
-      completed_late: false,
-
-      createdAt: task.createdAt || task.created_at || new Date(),
-      updatedAt: new Date(),
-    };
-  };
-
-  const sessions = [];
-
-  for (let i = 0; i < sessionCount; i++) {
-    const sessionStart = findNextAvailableSessionStart({
-      durationMinutes: sessionDurationMinutes,
-      generatedSessions: sessions,
-      avoidExistingTasks: shouldAutoAllocate,
-      preferredFrom: planningWindowStart,
-    });
-
-    if (!isValidDate(sessionStart)) {
-      throw new Error("PLANNING_NOT_ENOUGH_FREE_TIME");
+    if (busySlot.end_time > cursor) {
+      cursor = roundUpToMinutesStep(
+        busySlot.end_time,
+        15
+      );
     }
+  }
 
-    const sessionEnd = addMinutes(sessionStart, sessionDurationMinutes);
+  const possibleEnd = addMinutes(
+    cursor,
+    durationMinutes
+  );
 
-    if (sessionEnd > latestPlanningDate) {
-      throw new Error("PLANNING_NOT_ENOUGH_FREE_TIME");
-    }
+  if (possibleEnd <= dailyWindow.end) {
+    return cursor;
+  }
 
-    sessions.push(
-      buildSessionData({
-        sessionTitle: `${title} ${i + 1}/${sessionCount}`,
-        sessionDetail: detail,
+  return null;
+};
+
+const allocateBalancedPlanningSessions = ({
+  config,
+  existingTasks,
+}) => {
+  const generatedSessions = [];
+  const selectedCountByDay = new Map();
+
+  const fullSessionCount = Math.floor(
+    config.totalPlannedMinutes /
+    config.sessionDurationMinutes
+  );
+
+  const remainingMinutes =
+    config.totalPlannedMinutes %
+    config.sessionDurationMinutes;
+
+  let remainingFullSessions = fullSessionCount;
+  let dailyLimit = 1;
+
+  // กระจายรอบเต็มวันละ 1 รอบก่อน
+  // เมื่อจำนวนวันไม่พอ จึงเพิ่มเป็นวันละ 2 รอบ, 3 รอบ ตามลำดับ
+  while (remainingFullSessions > 0) {
+    let addedInThisPass = false;
+
+    for (const day of config.planningDays) {
+      if (remainingFullSessions <= 0) break;
+
+      const dayKey = getLocalDateKey(day);
+      const selectedToday =
+        selectedCountByDay.get(dayKey) || 0;
+
+      if (selectedToday >= dailyLimit) {
+        continue;
+      }
+
+      const sessionStart =
+        findAvailableStartInPlanningDay({
+          date: day,
+          durationMinutes:
+            config.sessionDurationMinutes,
+          config,
+          existingTasks,
+          generatedSessions,
+        });
+
+      if (!isValidDate(sessionStart)) {
+        continue;
+      }
+
+      const sessionEnd = addMinutes(
         sessionStart,
-        sessionEnd,
-        sessionDuration: sessionDurationMinutes,
-        index: i + 1,
-        taskType: "planning_session",
-        academicTaskType: "planning_session",
-        autoScheduled: shouldAutoAllocate,
-      })
-    );
+        config.sessionDurationMinutes
+      );
+
+      generatedSessions.push({
+        start_time: sessionStart,
+        end_time: sessionEnd,
+        duration_minutes:
+          config.sessionDurationMinutes,
+      });
+
+      selectedCountByDay.set(
+        dayKey,
+        selectedToday + 1
+      );
+
+      remainingFullSessions -= 1;
+      addedInThisPass = true;
+    }
+
+    if (remainingFullSessions <= 0) {
+      break;
+    }
+
+    if (!addedInThisPass) {
+      dailyLimit += 1;
+
+      // ป้องกัน loop ไม่รู้จบเมื่อไม่มีเวลาว่างจริง
+      if (dailyLimit > 50) {
+        break;
+      }
+    } else {
+      dailyLimit += 1;
+    }
   }
 
-  if (task.add_review_session === true) {
-    const reviewDuration = Math.min(sessionDurationMinutes, 90);
+  if (remainingFullSessions > 0) {
+    throw new Error("PLANNING_NOT_ENOUGH_FREE_TIME");
+  }
 
-    const preferredReviewStart = new Date(latestPlanningDate);
-    preferredReviewStart.setHours(
-      Math.max(safeStartHour, Math.min(18, safeEndHour - 1)),
-      0,
-      0,
-      0
-    );
+  // รอบสุดท้ายใช้เฉพาะเวลาที่เหลือ
+  // พยายามวางหลังรอบเต็มล่าสุดก่อน เพื่อให้เป็นรอบสุดท้ายตามลำดับเวลา
+  if (remainingMinutes > 0) {
+    const latestGeneratedStart =
+      generatedSessions.length > 0
+        ? [...generatedSessions].sort(
+          (a, b) =>
+            b.start_time.getTime() -
+            a.start_time.getTime()
+        )[0].start_time
+        : null;
 
-    const reviewStart = findNextAvailableSessionStart({
-      durationMinutes: reviewDuration,
-      generatedSessions: sessions,
-      avoidExistingTasks: shouldAutoAllocate,
-      preferredFrom: preferredReviewStart,
+    const preferredDays = latestGeneratedStart
+      ? [
+        ...config.planningDays.filter(
+          (day) =>
+            getDayOnly(day) >=
+            getDayOnly(latestGeneratedStart)
+        ),
+        ...config.planningDays.filter(
+          (day) =>
+            getDayOnly(day) <
+            getDayOnly(latestGeneratedStart)
+        ),
+      ]
+      : config.planningDays;
+
+    let remainderStart = null;
+
+    for (const day of preferredDays) {
+      remainderStart =
+        findAvailableStartInPlanningDay({
+          date: day,
+          durationMinutes: remainingMinutes,
+          config,
+          existingTasks,
+          generatedSessions,
+        });
+
+      if (isValidDate(remainderStart)) {
+        break;
+      }
+    }
+
+    if (!isValidDate(remainderStart)) {
+      throw new Error("PLANNING_NOT_ENOUGH_FREE_TIME");
+    }
+
+    generatedSessions.push({
+      start_time: remainderStart,
+      end_time: addMinutes(
+        remainderStart,
+        remainingMinutes
+      ),
+      duration_minutes: remainingMinutes,
+    });
+  }
+
+  return generatedSessions.sort(
+    (a, b) =>
+      a.start_time.getTime() -
+      b.start_time.getTime()
+  );
+};
+
+const buildPlanningSessionData = ({
+  task,
+  parentTaskId,
+  config,
+  sessionStart,
+  sessionDuration,
+  index,
+  sessionCount,
+}) => {
+  const { userId, email } = getCurrentUser();
+
+  const title =
+    task.title?.trim() || "Untitled Task";
+
+  const detail = task.detail || "";
+
+  return {
+    title: `${title} ${index}/${sessionCount}`,
+    detail,
+
+    user_id: userId,
+    user_email: email,
+
+    start_time: new Date(sessionStart),
+    end_time: addMinutes(
+      sessionStart,
+      sessionDuration
+    ),
+
+    task_type: "planning_session",
+    academic_task_type: "planning_session",
+
+    priority: normalizePriority(task.priority),
+    deadline: config.deadlineDate,
+    estimated_duration_minutes: sessionDuration,
+
+    planning_enabled: false,
+    total_planned_minutes: null,
+    session_duration_minutes: sessionDuration,
+    plan_before_deadline_days:
+      config.planBeforeDeadlineDays,
+    auto_schedule: true,
+    auto_scheduled: true,
+    add_review_session: false,
+    is_generated_session: true,
+    parent_task_id: parentTaskId,
+    planned_session_count: null,
+    planned_completed_count: 0,
+    generated_session_index: index,
+    generated_session_total: sessionCount,
+
+    preferred_study_window:
+      config.preferredStudyWindow,
+    preferred_study_start_hour:
+      config.safeStartHour,
+    preferred_study_start_minute:
+      config.safeStartMinute,
+    preferred_study_end_hour:
+      config.safeEndHour,
+    preferred_study_end_minute:
+      config.safeEndMinute,
+
+    status: "active",
+    is_completed: false,
+
+    is_recurring: false,
+    recurrence_type: "none",
+    recurrence_interval_days: null,
+    recurrence_weekdays: null,
+    recurrence_week_interval: null,
+    recurrence_month_day: null,
+    recurrence_month_interval: null,
+    recurrence_index: null,
+    recurrence_group_id: null,
+
+    completedAt: null,
+    completed_at: null,
+    completed_late: false,
+
+    createdAt:
+      task.createdAt ||
+      task.created_at ||
+      new Date(),
+    updatedAt: new Date(),
+  };
+};
+
+const buildPlanningSessions = (
+  task,
+  parentTaskId,
+  options = {}
+) => {
+  const { existingTasks = [] } = options;
+  const config = getPlanningConfiguration(task);
+
+  const allocatedSessions =
+    allocateBalancedPlanningSessions({
+      config,
+      existingTasks,
     });
 
-    if (!isValidDate(reviewStart)) {
-      throw new Error("PLANNING_NOT_ENOUGH_FREE_TIME");
-    }
-
-    const reviewEnd = addMinutes(reviewStart, reviewDuration);
-
-    if (reviewEnd > latestPlanningDate) {
-      throw new Error("PLANNING_NOT_ENOUGH_FREE_TIME");
-    }
-
-    sessions.push(
-      buildSessionData({
-        sessionTitle: `Review ${title}`,
-        sessionDetail: "Final review session before the deadline.",
-        sessionStart: reviewStart,
-        sessionEnd: reviewEnd,
-        sessionDuration: reviewDuration,
-        index: sessionCount + 1,
-        taskType: "review_session",
-        academicTaskType: "review_session",
-        autoScheduled: shouldAutoAllocate,
+  return allocatedSessions.map(
+    (session, index) =>
+      buildPlanningSessionData({
+        task,
+        parentTaskId,
+        config,
+        sessionStart: session.start_time,
+        sessionDuration:
+          session.duration_minutes,
+        index: index + 1,
+        sessionCount:
+          allocatedSessions.length,
       })
+  );
+};
+
+const buildPlanningSessionsFromDraft = (
+  task,
+  parentTaskId,
+  draftSessions
+) => {
+  const config = getPlanningConfiguration(task);
+
+  if (!Array.isArray(draftSessions)) {
+    throw new Error("PLANNING_DRAFT_REQUIRED");
+  }
+
+  if (
+    draftSessions.length !==
+    config.sessionDurations.length
+  ) {
+    throw new Error(
+      "PLANNING_DRAFT_SESSION_COUNT_MISMATCH"
     );
   }
 
-  return sessions;
+  const sortedDraftSessions = draftSessions
+    .map((session) => ({
+      ...session,
+      start_time: toDate(session.start_time),
+    }))
+    .sort(
+      (a, b) =>
+        a.start_time.getTime() -
+        b.start_time.getTime()
+    );
+
+  return sortedDraftSessions.map(
+    (session, index) => {
+      const sessionStart = toDate(
+        session.start_time
+      );
+
+      if (!isValidDate(sessionStart)) {
+        throw new Error(
+          "PLANNING_DRAFT_INVALID_SESSION_TIME"
+        );
+      }
+
+      const sessionDuration =
+        config.sessionDurations[index];
+
+      return buildPlanningSessionData({
+        task,
+        parentTaskId,
+        config,
+        sessionStart,
+        sessionDuration,
+        index: index + 1,
+        sessionCount:
+          sortedDraftSessions.length,
+      });
+    }
+  );
+};
+
+const validatePlanningSessionBounds = (
+  task,
+  sessions
+) => {
+  const config = getPlanningConfiguration(task);
+  const issues = [];
+
+  if (
+    !Array.isArray(sessions) ||
+    sessions.length !== config.sessionCount
+  ) {
+    issues.push({
+      type: "SESSION_COUNT_MISMATCH",
+      expected: config.sessionCount,
+      actual: Array.isArray(sessions)
+        ? sessions.length
+        : 0,
+    });
+
+    return {
+      is_valid: false,
+      issues,
+    };
+  }
+
+  const sortedSessions = [...sessions].sort(
+    (a, b) =>
+      toDate(a.start_time).getTime() -
+      toDate(b.start_time).getTime()
+  );
+
+  sortedSessions.forEach((session, index) => {
+    const sessionStart = toDate(
+      session.start_time
+    );
+
+    const sessionEnd = toDate(
+      session.end_time
+    );
+
+    if (
+      !isValidDate(sessionStart) ||
+      !isValidDate(sessionEnd) ||
+      sessionEnd <= sessionStart
+    ) {
+      issues.push({
+        type: "INVALID_SESSION_TIME",
+        session_index: index + 1,
+      });
+
+      return;
+    }
+
+    const dailyWindow = getPlanningDailyWindow(
+      sessionStart,
+      config
+    );
+
+    if (
+      !dailyWindow ||
+      sessionStart < dailyWindow.start ||
+      sessionEnd > dailyWindow.end
+    ) {
+      issues.push({
+        type: "SESSION_OUTSIDE_PLANNING_WINDOW",
+        session_index: index + 1,
+        start_time: sessionStart,
+        end_time: sessionEnd,
+      });
+    }
+
+    const actualDuration = Math.round(
+      (sessionEnd.getTime() -
+        sessionStart.getTime()) /
+      (1000 * 60)
+    );
+
+    const expectedDuration =
+      config.sessionDurations[index];
+
+    if (actualDuration !== expectedDuration) {
+      issues.push({
+        type: "SESSION_DURATION_MISMATCH",
+        session_index: index + 1,
+        expected_duration_minutes:
+          expectedDuration,
+        actual_duration_minutes:
+          actualDuration,
+      });
+    }
+  });
+
+  for (
+    let index = 1;
+    index < sortedSessions.length;
+    index += 1
+  ) {
+    const previousEnd = toDate(
+      sortedSessions[index - 1].end_time
+    );
+
+    const currentStart = toDate(
+      sortedSessions[index].start_time
+    );
+
+    if (currentStart < previousEnd) {
+      issues.push({
+        type: "DRAFT_SESSIONS_OVERLAP",
+        first_session_index: index,
+        second_session_index: index + 1,
+      });
+    }
+  }
+
+  return {
+    is_valid: issues.length === 0,
+    issues,
+  };
+};
+
+const getPlanningDraftSummary = (
+  sessions
+) => {
+  const countByDay = {};
+
+  sessions.forEach((session) => {
+    const dayKey = getLocalDateKey(
+      session.start_time
+    );
+
+    countByDay[dayKey] =
+      (countByDay[dayKey] || 0) + 1;
+  });
+
+  const maxSessionsInOneDay = Math.max(
+    0,
+    ...Object.values(countByDay)
+  );
+
+  return {
+    session_count: sessions.length,
+    sessions_by_day: countByDay,
+    max_sessions_in_one_day:
+      maxSessionsInOneDay,
+    has_multiple_sessions_in_one_day:
+      maxSessionsInOneDay > 1,
+  };
 };
 
 const buildEmptyConflictResult = (instances = []) => {
@@ -1340,6 +1839,15 @@ const findConflictsForInstances = async (instances, options = {}) => {
         if (!existingTask.start_time || !existingTask.end_time) return false;
 
         if (existingTask.is_completed === true) return false;
+
+        // Parent ของ Planning Mode เป็นข้อมูลสรุปของแผน
+        // จึงไม่ใช้เป็นช่วงเวลาชนซ้ำกับกิจกรรมย่อย
+        if (
+          existingTask.task_type === "planned_task" &&
+          existingTask.planning_enabled === true
+        ) {
+          return false;
+        }
 
         if (excludedTaskIds.has(existingTask.id)) {
           return false;
@@ -1523,37 +2031,191 @@ export const checkTaskConflicts = async (task, options = {}) => {
   };
 };
 
+export const createPlanningDraft = async (task) => {
+  const safeTask = normalizePlanningTaskRules(task);
+  const existingTasks =
+    await getExistingTasksForCurrentUser();
+
+  const sessions = buildPlanningSessions(
+    safeTask,
+    null,
+    {
+      existingTasks,
+    }
+  );
+
+  const validation =
+    validatePlanningSessionBounds(
+      safeTask,
+      sessions
+    );
+
+  return {
+    success: validation.is_valid,
+    message: validation.is_valid
+      ? "PLANNING_DRAFT_CREATED"
+      : "PLANNING_DRAFT_INVALID",
+    sessions,
+    validation_errors: validation.issues,
+    summary:
+      getPlanningDraftSummary(sessions),
+  };
+};
+
+export const checkPlanningDraftConflicts = async (
+  task,
+  draftSessions
+) => {
+  const safeTask = normalizePlanningTaskRules(task);
+
+  let sessions;
+
+  try {
+    sessions = buildPlanningSessionsFromDraft(
+      safeTask,
+      null,
+      draftSessions
+    );
+  } catch (error) {
+    return {
+      success: false,
+      is_valid: false,
+      has_conflict: false,
+      message:
+        error?.message ||
+        "PLANNING_DRAFT_INVALID",
+      validation_errors: [
+        {
+          type:
+            error?.message ||
+            "PLANNING_DRAFT_INVALID",
+        },
+      ],
+      sessions: [],
+    };
+  }
+
+  const validation =
+    validatePlanningSessionBounds(
+      safeTask,
+      sessions
+    );
+
+  if (!validation.is_valid) {
+    return {
+      success: false,
+      is_valid: false,
+      has_conflict: false,
+      message: "PLANNING_DRAFT_INVALID",
+      validation_errors:
+        validation.issues,
+      sessions,
+    };
+  }
+
+  const conflictResult =
+    await findConflictsForInstances(sessions);
+
+  return {
+    success: !conflictResult.hasConflict,
+    is_valid: true,
+    has_conflict:
+      conflictResult.hasConflict,
+    conflict_count:
+      conflictResult.conflictCount,
+    conflict_instance_count:
+      conflictResult.conflictInstanceCount,
+    conflict_task_ids:
+      conflictResult.conflictTaskIds,
+    conflict_items:
+      buildConflictSummaryForUI(
+        conflictResult
+      ),
+    conflict_instances:
+      conflictResult.conflictInstances,
+    message: conflictResult.hasConflict
+      ? "TIME_CONFLICT_DETECTED"
+      : "PLANNING_DRAFT_VALID",
+    validation_errors: [],
+    sessions,
+    summary:
+      getPlanningDraftSummary(sessions),
+  };
+};
+
 export const addTask = async (task, options = {}) => {
-  const { saveAnyway = false, skipConflictCheck = false } = options;
+  const {
+    saveAnyway = false,
+    skipConflictCheck = false,
+    planningSessions = null,
+  } = options;
 
   const taskRef = getTaskCollectionRef();
   const isPlanningTask = task.planning_enabled === true;
 
+  const safeTask = isPlanningTask
+    ? normalizePlanningTaskRules(task)
+    : task;
+
   const mainTaskDocRef = isPlanningTask ? doc(taskRef) : null;
   const parentTaskId = mainTaskDocRef?.id || null;
 
-  const existingTasksForAutoSchedule =
-    isPlanningTask && task.auto_schedule === true
-      ? await getExistingTasksForCurrentUser()
-      : [];
+  // กิจกรรมแบบวางแผนต้องโหลดกิจกรรมเดิมมาคำนวณทุกครั้ง
+  const existingTasksForAutoSchedule = isPlanningTask
+    ? await getExistingTasksForCurrentUser()
+    : [];
 
   const mainInstances = buildTaskInstances({
-    ...task,
-    task_type: isPlanningTask ? "planned_task" : task.task_type || "fixed",
+    ...safeTask,
+    task_type: isPlanningTask
+      ? "planned_task"
+      : safeTask.task_type || "fixed",
     planning_enabled: isPlanningTask,
     is_generated_session: false,
     parent_task_id: null,
   });
 
-  const busyTasksForAutoSchedule = existingTasksForAutoSchedule;
+  let generatedSessions = [];
 
-  const generatedSessions = isPlanningTask
-    ? buildPlanningSessions(task, parentTaskId, {
-      existingTasks: busyTasksForAutoSchedule,
-    })
-    : [];
+  if (isPlanningTask) {
+    generatedSessions = Array.isArray(
+      planningSessions
+    )
+      ? buildPlanningSessionsFromDraft(
+        safeTask,
+        parentTaskId,
+        planningSessions
+      )
+      : buildPlanningSessions(
+        safeTask,
+        parentTaskId,
+        {
+          existingTasks:
+            existingTasksForAutoSchedule,
+        }
+      );
 
-  const instances = [...mainInstances, ...generatedSessions];
+    const planningValidation =
+      validatePlanningSessionBounds(
+        safeTask,
+        generatedSessions
+      );
+
+    if (!planningValidation.is_valid) {
+      return {
+        success: false,
+        has_conflict: false,
+        message: "PLANNING_DRAFT_INVALID",
+        validation_errors:
+          planningValidation.issues,
+      };
+    }
+  }
+
+  const instances = [
+    ...mainInstances,
+    ...generatedSessions,
+  ];
 
   const conflictCheckInstances = instances.filter(
     (instance) => instance.is_generated_session === true || !isPlanningTask
@@ -1563,7 +2225,11 @@ export const addTask = async (task, options = {}) => {
     ? buildEmptyConflictResult(conflictCheckInstances)
     : await findConflictsForInstances(conflictCheckInstances);
 
-  if (conflictResult.hasConflict && !saveAnyway) {
+  // Planning Mode ไม่อนุญาตให้บันทึกทับกิจกรรมเดิม
+  if (
+    conflictResult.hasConflict &&
+    (isPlanningTask || !saveAnyway)
+  ) {
     return {
       success: false,
       has_conflict: true,
@@ -2186,25 +2852,9 @@ export const getFreeTimeSlots = async (options = {}) => {
   const lunchStart = new Date(selectedDate);
   lunchStart.setHours(12, 0, 0, 0);
 
-  const lunchEnd = new Date(selectedDate);
-  lunchEnd.setHours(13, 0, 0, 0);
+  const mergedBusySlots = mergeBusySlots(busySlots);
 
-  const lunchBreakSlots =
-    lunchEnd <= windowStart || lunchStart >= dayEnd
-      ? []
-      : [
-        {
-          task_id: "system-lunch-break",
-          title: "Lunch Break",
-          start_time: lunchStart < windowStart ? new Date(windowStart) : lunchStart,
-          end_time: lunchEnd > dayEnd ? new Date(dayEnd) : lunchEnd,
-        },
-      ];  
 
-  const mergedBusySlots = mergeBusySlots([
-    ...busySlots,
-    ...lunchBreakSlots,
-  ]);
   const freeSlots = [];
 
   const pushSplitSlotsFromGap = (gapStart, gapEnd) => {
@@ -2318,11 +2968,39 @@ export const updateParentPlanningProgress = async (parentTaskId) => {
     (task) => task.is_completed
   ).length;
 
-  await updateDoc(parentDocRef, {
+  const totalSessionCount = generatedSessions.length;
+  const allSessionsCompleted =
+    totalSessionCount > 0 && completedCount === totalSessionCount;
+
+  const parentData = parentSnapshot.data() || {};
+  const parentWasCompleted = parentData.is_completed === true;
+  const nowTimestamp = Timestamp.now();
+
+  const progressUpdate = {
     planned_completed_count: completedCount,
-    planned_session_count: generatedSessions.length,
-    updatedAt: Timestamp.now(),
-  });
+    planned_session_count: totalSessionCount,
+    status: allSessionsCompleted ? "completed" : "active",
+    is_completed: allSessionsCompleted,
+    completed_late: false,
+    updatedAt: nowTimestamp,
+    updated_at: nowTimestamp,
+  };
+
+  if (allSessionsCompleted) {
+    // บันทึกเวลาที่ parent เสร็จเฉพาะตอนเปลี่ยนจากยังไม่เสร็จเป็นเสร็จ
+    // เพื่อไม่ให้เวลาถูกเปลี่ยนทุกครั้งที่มีการคำนวณ progress ซ้ำ
+    if (!parentWasCompleted) {
+      progressUpdate.completedAt = nowTimestamp;
+      progressUpdate.completed_at = nowTimestamp;
+    }
+  } else {
+    // เมื่อผู้ใช้ยกเลิกสถานะเสร็จของกิจกรรมย่อยอย่างน้อยหนึ่งรอบ
+    // ให้ parent กลับมาเป็น active โดยอัตโนมัติ
+    progressUpdate.completedAt = null;
+    progressUpdate.completed_at = null;
+  }
+
+  await updateDoc(parentDocRef, progressUpdate);
 };
 
 export const markTaskDone = async (taskId) => {
@@ -2347,12 +3025,17 @@ export const listenTasks = (callback) => {
 export const deleteTask = async (taskId) => {
   const task = await getTaskById(taskId);
 
-  const taskDocRef = getTaskDocRef(taskId);
+  // ลบ Google Event ก่อน
+  await deleteLinkedGoogleCalendarEvent(task);
 
+  // แล้วจึงลบงานใน Firestore
+  const taskDocRef = getTaskDocRef(taskId);
   await deleteDoc(taskDocRef);
 
   if (task.parent_task_id) {
-    await updateParentPlanningProgress(task.parent_task_id);
+    await updateParentPlanningProgress(
+      task.parent_task_id
+    );
   }
 };
 
@@ -2366,6 +3049,29 @@ export const deletePlanningTaskWithSessions = async (parentTaskId) => {
   const q = query(taskRef, where("parent_task_id", "==", parentTaskId));
 
   const snapshot = await getDocs(q);
+  for (const sessionDoc of snapshot.docs) {
+    const sessionTask = {
+      id: sessionDoc.id,
+      ...sessionDoc.data(),
+    };
+
+    await deleteLinkedGoogleCalendarEvent(
+      sessionTask
+    );
+  }
+
+  const parentDocRef =
+    getTaskDocRef(parentTaskId);
+
+  const parentSnapshot =
+    await getDoc(parentDocRef);
+
+  if (parentSnapshot.exists()) {
+    await deleteLinkedGoogleCalendarEvent({
+      id: parentSnapshot.id,
+      ...parentSnapshot.data(),
+    });
+  }
 
   const batch = writeBatch(db);
 
@@ -2373,7 +3079,6 @@ export const deletePlanningTaskWithSessions = async (parentTaskId) => {
     batch.delete(docSnap.ref);
   });
 
-  const parentDocRef = getTaskDocRef(parentTaskId);
   batch.delete(parentDocRef);
 
   await batch.commit();
@@ -2395,6 +3100,15 @@ export const deleteRecurringTaskGroup = async (recurrenceGroupId) => {
 
   if (snapshot.empty) {
     return;
+  }
+
+  for (const taskDoc of snapshot.docs) {
+    const task = {
+      id: taskDoc.id,
+      ...taskDoc.data(),
+    };
+
+    await deleteLinkedGoogleCalendarEvent(task);
   }
 
   const batch = writeBatch(db);

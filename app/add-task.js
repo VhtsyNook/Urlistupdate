@@ -13,12 +13,17 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import TimePickerModal from "../src/components/TimePickerModal";
+//import TimePickerModal from "../src/components/TimePickerModal";
 import { auth } from "../src/config/firebase";
 import { COLORS } from "../src/constants/theme";
 import { useLanguage } from "../src/i18n/LanguageContext";
-import { addTask } from "../src/services/taskService";
+import {
+  addTask,
+  checkPlanningDraftConflicts,
+  createPlanningDraft,
+} from "../src/services/taskService";
 import {
   RECURRENCE_TYPES,
   WEEKDAY_OPTIONS,
@@ -50,6 +55,7 @@ function SectionCard({ title, icon, open, onToggle, children }) {
 export default function AddTask() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const insets = useSafeAreaInsets();
   const { language } = useLanguage();
 
   const isThai = language === "th";
@@ -93,20 +99,30 @@ export default function AddTask() {
   const [deadlineDate, setDeadlineDate] = useState(
     new Date(Date.now() + 24 * 60 * 60 * 1000)
   );
+  const [hasDeadline, setHasDeadline] = useState(true);
   const [estimatedDuration, setEstimatedDuration] = useState(60);
 
   const [planningEnabled, setPlanningEnabled] = useState(false);
   const [totalPlannedMinutes, setTotalPlannedMinutes] = useState(600);
   const [sessionDurationMinutes, setSessionDurationMinutes] = useState(60);
-  const [planBeforeDeadlineDays, setPlanBeforeDeadlineDays] = useState(1);
-  const [autoSchedule, setAutoSchedule] = useState(true);
-  const [addReviewSession, setAddReviewSession] = useState(true);
-  const [preferredStudyWindow, setPreferredStudyWindow] = useState("evening");
+
+
+  const [preferredStartTime, setPreferredStartTime] = useState(() => {
+    const value = new Date();
+    value.setHours(9, 0, 0, 0);
+    return value;
+  });
+
+  const [preferredEndTime, setPreferredEndTime] = useState(() => {
+    const value = new Date();
+    value.setHours(12, 0, 0, 0);
+    return value;
+  });
 
   const [isSaving, setIsSaving] = useState(false);
 
-  const [timePickerVisible, setTimePickerVisible] = useState(false);
-  const [timePickerTarget, setTimePickerTarget] = useState(null);
+  //const [timePickerVisible, setTimePickerVisible] = useState(false);
+  //const [timePickerTarget, setTimePickerTarget] = useState(null);
 
   const [repeatDropdownOpen, setRepeatDropdownOpen] = useState(false);
   const [durationDropdownOpen, setDurationDropdownOpen] = useState(false);
@@ -118,12 +134,17 @@ export default function AddTask() {
 
   const [totalPlanDropdownOpen, setTotalPlanDropdownOpen] = useState(false);
   const [sessionDropdownOpen, setSessionDropdownOpen] = useState(false);
-  const [beforeDeadlineDropdownOpen, setBeforeDeadlineDropdownOpen] = useState(false);
-  const [studyWindowDropdownOpen, setStudyWindowDropdownOpen] = useState(false);
+
 
   const [conflictModalVisible, setConflictModalVisible] = useState(false);
   const [conflictResult, setConflictResult] = useState(null);
   const [pendingTaskPayload, setPendingTaskPayload] = useState(null);
+
+  const [planningDraftVisible, setPlanningDraftVisible] = useState(false);
+  const [planningDraftPayload, setPlanningDraftPayload] = useState(null);
+  const [planningDraftSessions, setPlanningDraftSessions] = useState([]);
+  const [planningDraftResult, setPlanningDraftResult] = useState(null);
+  const [planningDraftChecking, setPlanningDraftChecking] = useState(false);
 
   const repeatOptions = [
     {
@@ -168,11 +189,7 @@ export default function AddTask() {
 
   const customDayOptions = Array.from({ length: 31 }, (_, index) => index + 1);
 
-  const weekIntervalOptions = [1, 2, 3, 4, 5, 6, 8, 12];
-
   const monthDayOptions = Array.from({ length: 31 }, (_, index) => index + 1);
-
-  const monthIntervalOptions = [1, 2, 3, 4, 6, 12];
 
   const priorityOptions = [
     {
@@ -217,54 +234,9 @@ export default function AddTask() {
     1200, // 20 ชม.
   ];
   const sessionOptions = [30, 45, 60, 90, 120];
-  const beforeDeadlineOptions = [0, 1, 2, 3, 5, 7];
-  const studyWindowOptions = [
-    {
-      label: text("Morning", "ช่วงเช้า"),
-      value: "morning",
-      description: "09:00 - 12:00",
-      startHour: 9,
-      startMinute: 0,
-      endHour: 12,
-      endMinute: 0,
-    },
-    {
-      label: text("Afternoon", "ช่วงบ่าย"),
-      value: "afternoon",
-      description: "13:00 - 17:00",
-      startHour: 13,
-      startMinute: 0,
-      endHour: 17,
-      endMinute: 0,
-    },
-    {
-      label: text("Evening", "ช่วงเย็น"),
-      value: "evening",
-      description: "19:00 - 22:00",
-      startHour: 19,
-      startMinute: 0,
-      endHour: 22,
-      endMinute: 0,
-    },
-    {
-      label: text("Wide study window", "ช่วงเรียนกว้าง"),
-      value: "wide",
-      description: "08:00 - 22:00",
-      startHour: 8,
-      startMinute: 0,
-      endHour: 22,
-      endMinute: 0,
-    },
-  ];
 
 
-  const getPreferredStudyWindowConfig = () => {
-    return (
-      studyWindowOptions.find(
-        (option) => option.value === preferredStudyWindow
-      ) || studyWindowOptions[2]
-    );
-  };
+
 
   const getReturnPath = () => {
     if (isFromCalendar) return "/calentask";
@@ -528,6 +500,14 @@ export default function AddTask() {
     if (target === "end") return endDateTime;
     if (target === "deadline") return deadlineDate;
 
+    if (target === "planningStart") {
+      return preferredStartTime;
+    }
+
+    if (target === "planningEnd") {
+      return preferredEndTime;
+    }
+
     return new Date();
   };
 
@@ -581,72 +561,143 @@ export default function AddTask() {
     }
   };
 
-  const openTimePicker = (target) => {
-    if (isSaving) return;
-
-    setTimePickerTarget(target);
-    setTimePickerVisible(true);
-  };
-
-  const closeTimePicker = () => {
-    setTimePickerVisible(false);
-    setTimePickerTarget(null);
-  };
-
-  const handleConfirmTime = ({ hour, minute }) => {
-    if (!timePickerTarget) {
-      closeTimePicker();
+  const handleTimePickerValueChange = (
+    target,
+    selectedValue
+  ) => {
+    if (!selectedValue || !target) {
       return;
     }
 
-    if (timePickerTarget === "start") {
-      const selectedStart = new Date(startDateTime);
-      selectedStart.setHours(hour, minute, 0, 0);
+    const selectedHour =
+      selectedValue.getHours();
+    const selectedMinute =
+      selectedValue.getMinutes();
 
-      const normalizedEnd = normalizeEndDateForStart(
-        selectedStart,
-        endDateTime
+    if (target === "planningStart") {
+      const nextStartTime = new Date(preferredStartTime);
+
+      nextStartTime.setHours(
+        selectedHour,
+        selectedMinute,
+        0,
+        0
       );
+
+      setPreferredStartTime(nextStartTime);
+      return;
+    }
+
+    if (target === "planningEnd") {
+      const nextEndTime = new Date(preferredEndTime);
+
+      nextEndTime.setHours(
+        selectedHour,
+        selectedMinute,
+        0,
+        0
+      );
+
+      setPreferredEndTime(nextEndTime);
+      return;
+    }
+
+    if (target === "start") {
+      const selectedStart =
+        new Date(startDateTime);
+
+      selectedStart.setHours(
+        selectedHour,
+        selectedMinute,
+        0,
+        0
+      );
+
+      const normalizedEnd =
+        normalizeEndDateForStart(
+          selectedStart,
+          endDateTime
+        );
 
       setStartDateTime(selectedStart);
       setEndDateTime(normalizedEnd);
+
+      return;
     }
 
-    if (timePickerTarget === "end") {
-      const selectedEnd = buildDateWithTime(startDateTime, endDateTime);
-      selectedEnd.setHours(hour, minute, 0, 0);
+    if (target === "end") {
+      const selectedEnd =
+        buildDateWithTime(
+          startDateTime,
+          endDateTime
+        );
 
+      selectedEnd.setHours(
+        selectedHour,
+        selectedMinute,
+        0,
+        0
+      );
+
+      // ถ้าเวลาสิ้นสุดน้อยกว่าเวลาเริ่ม
+      // ให้ตีความว่าเป็นวันถัดไป
       if (selectedEnd <= startDateTime) {
-        selectedEnd.setDate(selectedEnd.getDate() + 1);
+        selectedEnd.setDate(
+          selectedEnd.getDate() + 1
+        );
       }
 
       setEndDateTime(selectedEnd);
     }
-
-    closeTimePicker();
   };
 
   const openPicker = (target, mode) => {
-    if (isSaving) return;
-
-    if (mode === "time") {
-      openTimePicker(target);
+    if (isSaving) {
       return;
     }
 
-    DateTimePickerAndroid.open({
-      value: getPickerValue(target) || new Date(),
-      mode: "date",
-      is24Hour: true,
-      display: "default",
-      onChange: (event, selectedValue) => {
-        if (event?.type === "dismissed") return;
-        if (!selectedValue) return;
+    const pickerMode =
+      mode === "time" ? "time" : "date";
 
-        handleDatePickerValueChange(target, selectedValue);
+    DateTimePickerAndroid.open({
+      value:
+        getPickerValue(target) ||
+        new Date(),
+
+      mode: pickerMode,
+
+      // ใช้เวลาแบบ 24 ชั่วโมง
+      is24Hour: true,
+
+      // ใช้หน้าตาของเครื่องผู้ใช้
+      display: "default",
+
+      onChange: (event, selectedValue) => {
+        if (event?.type === "dismissed") {
+          return;
+        }
+
+        if (!selectedValue) {
+          return;
+        }
+
+        if (pickerMode === "time") {
+          handleTimePickerValueChange(
+            target,
+            selectedValue
+          );
+
+          return;
+        }
+
+        handleDatePickerValueChange(
+          target,
+          selectedValue
+        );
       },
     });
   };
+
 
   const handleCustomDaysChange = (value) => {
     const onlyNumber = value.replace(/[^0-9]/g, "");
@@ -742,6 +793,7 @@ export default function AddTask() {
 
     if (nextType === "study_plan") {
       setPlanningEnabled(true);
+      setHasDeadline(true);
       setRepeatType(RECURRENCE_TYPES.NONE);
       setPriority("High");
       setDeadlineDate(endDateTime);
@@ -755,6 +807,7 @@ export default function AddTask() {
 
       if (nextValue) {
         setAcademicTaskType("study_plan");
+        setHasDeadline(true);
         setRepeatType(RECURRENCE_TYPES.NONE);
         setCustomDays(1);
         setWeekInterval(1);
@@ -799,8 +852,19 @@ export default function AddTask() {
 
   const buildTaskPayload = () => {
     const { safeStartTime, safeEndTime } = getSafeTaskTimeRange();
-    const studyWindowConfig = getPreferredStudyWindowConfig();
+    const planningStartDate = new Date(safeStartTime);
 
+    planningStartDate.setHours(
+      preferredStartTime.getHours(),
+      preferredStartTime.getMinutes(),
+      0,
+      0
+    );
+
+    const planningEndDate = addMinutes(
+      planningStartDate,
+      Number(sessionDurationMinutes || 60)
+    );
     const finalRepeatType =
       taskMode === "time" ? RECURRENCE_TYPES.NONE : repeatType;
 
@@ -809,9 +873,17 @@ export default function AddTask() {
       detail: detail.trim(),
 
 
-      start_time: safeStartTime,
-      end_time: safeEndTime,
-      is_all_day: isAllDay,
+      start_time: planningEnabled
+        ? planningStartDate
+        : safeStartTime,
+
+      end_time: planningEnabled
+        ? planningEndDate
+        : safeEndTime,
+
+      is_all_day: planningEnabled
+        ? false
+        : isAllDay,
 
       task_type: getTaskTypeForPayload(),
       academic_task_type: academicTaskType,
@@ -834,8 +906,10 @@ export default function AddTask() {
         finalRepeatType === RECURRENCE_TYPES.MONTHLY ? Number(monthInterval) : null,
 
       priority: priority,
-      deadline: deadlineDate,
-      estimated_duration_minutes: Number(estimatedDuration),
+      deadline: hasDeadline ? deadlineDate : null,
+      estimated_duration_minutes: planningEnabled
+        ? Number(sessionDurationMinutes)
+        : Number(estimatedDuration),
 
       planning_enabled: planningEnabled,
       total_planned_minutes: planningEnabled
@@ -844,30 +918,307 @@ export default function AddTask() {
       session_duration_minutes: planningEnabled
         ? Number(sessionDurationMinutes)
         : null,
-      plan_before_deadline_days: planningEnabled
-        ? Number(planBeforeDeadlineDays)
+      plan_before_deadline_days: planningEnabled ? 0 : null,
+      auto_schedule: planningEnabled,
+      add_review_session: false,
+
+      preferred_study_window: planningEnabled
+        ? "custom"
         : null,
-      auto_schedule: planningEnabled ? autoSchedule : false,
-      add_review_session: planningEnabled ? addReviewSession : false,
-      preferred_study_window: planningEnabled ? preferredStudyWindow : null,
+
       preferred_study_start_hour: planningEnabled
-        ? studyWindowConfig.startHour
+        ? preferredStartTime.getHours()
         : null,
+
       preferred_study_start_minute: planningEnabled
-        ? studyWindowConfig.startMinute
+        ? preferredStartTime.getMinutes()
         : null,
+
       preferred_study_end_hour: planningEnabled
-        ? studyWindowConfig.endHour
+        ? preferredEndTime.getHours()
         : null,
+
       preferred_study_end_minute: planningEnabled
-        ? studyWindowConfig.endMinute
+        ? preferredEndTime.getMinutes()
         : null,
+
       is_generated_session: false,
       parent_task_id: null,
 
       created_at: new Date(),
       updated_at: new Date(),
     };
+  };
+
+  const resetPlanningDraftState = () => {
+    setPlanningDraftVisible(false);
+    setPlanningDraftPayload(null);
+    setPlanningDraftSessions([]);
+    setPlanningDraftResult(null);
+    setPlanningDraftChecking(false);
+  };
+
+  const runPlanningDraftCheck = async (payload, sessions) => {
+    if (!payload || !Array.isArray(sessions)) {
+      return null;
+    }
+
+    try {
+      setPlanningDraftChecking(true);
+
+      const result = await checkPlanningDraftConflicts(
+        payload,
+        sessions
+      );
+
+      setPlanningDraftResult(result);
+
+      if (
+        Array.isArray(result?.sessions) &&
+        result.sessions.length === sessions.length
+      ) {
+        setPlanningDraftSessions(result.sessions);
+      }
+
+      return result;
+    } catch (error) {
+      console.error("Planning draft check error:", error);
+
+      const failedResult = {
+        success: false,
+        is_valid: false,
+        has_conflict: false,
+        message: error?.message || "PLANNING_DRAFT_INVALID",
+        validation_errors: [
+          {
+            type: error?.message || "PLANNING_DRAFT_INVALID",
+          },
+        ],
+        sessions,
+      };
+
+      setPlanningDraftResult(failedResult);
+      return failedResult;
+    } finally {
+      setPlanningDraftChecking(false);
+    }
+  };
+
+  const openPlanningDraftPreview = async (taskPayload) => {
+    const draft = await createPlanningDraft(taskPayload);
+
+    if (
+      draft?.success !== true ||
+      !Array.isArray(draft?.sessions) ||
+      draft.sessions.length === 0
+    ) {
+      const error = new Error(
+        draft?.message || "PLANNING_DRAFT_INVALID"
+      );
+      throw error;
+    }
+
+    setPlanningDraftPayload(taskPayload);
+    setPlanningDraftSessions(draft.sessions);
+
+    const checkedDraft = await runPlanningDraftCheck(
+      taskPayload,
+      draft.sessions
+    );
+
+    if (!checkedDraft) {
+      throw new Error("PLANNING_DRAFT_INVALID");
+    }
+
+    setPlanningDraftVisible(true);
+  };
+
+  const updatePlanningDraftSession = async (
+    sessionIndex,
+    mode,
+    selectedValue
+  ) => {
+    if (
+      !planningDraftPayload ||
+      !selectedValue ||
+      planningDraftChecking ||
+      isSaving
+    ) {
+      return;
+    }
+
+    const currentSession = planningDraftSessions[sessionIndex];
+    const currentStart = normalizeDate(currentSession?.start_time);
+    const currentEnd = normalizeDate(currentSession?.end_time);
+
+    if (!isValidDate(currentStart) || !isValidDate(currentEnd)) {
+      return;
+    }
+
+    const durationMinutes = Math.max(
+      1,
+      Math.round(
+        (currentEnd.getTime() - currentStart.getTime()) /
+        (1000 * 60)
+      )
+    );
+
+    const nextStart = new Date(currentStart);
+
+    if (mode === "date") {
+      nextStart.setFullYear(selectedValue.getFullYear());
+      nextStart.setMonth(selectedValue.getMonth());
+      nextStart.setDate(selectedValue.getDate());
+    } else {
+      nextStart.setHours(
+        selectedValue.getHours(),
+        selectedValue.getMinutes(),
+        0,
+        0
+      );
+    }
+
+    const nextEnd = addMinutes(nextStart, durationMinutes);
+
+    const nextSessions = planningDraftSessions
+      .map((session, index) =>
+        index === sessionIndex
+          ? {
+            ...session,
+            start_time: nextStart,
+            end_time: nextEnd,
+            estimated_duration_minutes: durationMinutes,
+            session_duration_minutes: durationMinutes,
+          }
+          : session
+      )
+      .sort(
+        (first, second) =>
+          normalizeDate(first.start_time).getTime() -
+          normalizeDate(second.start_time).getTime()
+      );
+
+    setPlanningDraftSessions(nextSessions);
+    setPlanningDraftResult(null);
+
+    await runPlanningDraftCheck(
+      planningDraftPayload,
+      nextSessions
+    );
+  };
+
+  const openPlanningDraftPicker = (sessionIndex, mode) => {
+    const session = planningDraftSessions[sessionIndex];
+    const sessionStart = normalizeDate(session?.start_time);
+
+    if (!isValidDate(sessionStart)) {
+      return;
+    }
+
+    DateTimePickerAndroid.open({
+      value: sessionStart,
+      mode,
+      is24Hour: true,
+      display: "default",
+      onChange: (event, selectedValue) => {
+        if (event?.type === "dismissed" || !selectedValue) {
+          return;
+        }
+
+        updatePlanningDraftSession(
+          sessionIndex,
+          mode,
+          selectedValue
+        );
+      },
+    });
+  };
+
+  const handleConfirmPlanningDraft = async () => {
+    if (
+      !ensureLoggedIn() ||
+      !planningDraftPayload ||
+      planningDraftSessions.length === 0 ||
+      planningDraftChecking ||
+      isSaving
+    ) {
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+
+      const checkedDraft = await checkPlanningDraftConflicts(
+        planningDraftPayload,
+        planningDraftSessions
+      );
+
+      setPlanningDraftResult(checkedDraft);
+
+      if (
+        checkedDraft?.is_valid !== true ||
+        checkedDraft?.has_conflict === true ||
+        checkedDraft?.success !== true
+      ) {
+        Alert.alert(
+          text("Plan needs changes", "แผนยังต้องแก้ไข"),
+          checkedDraft?.has_conflict === true
+            ? text(
+              "Some sessions conflict with existing tasks. Please change the highlighted sessions before confirming.",
+              "บางรอบชนกับกิจกรรมเดิม กรุณาแก้รอบที่แจ้งเตือนก่อนยืนยัน"
+            )
+            : text(
+              "Some sessions are outside the selected dates or preferred daily time range.",
+              "บางรอบอยู่นอกช่วงวันที่หรือเวลาที่สะดวก กรุณาแก้ไขก่อนยืนยัน"
+            )
+        );
+        return;
+      }
+
+      const result = await addTask(planningDraftPayload, {
+        planningSessions:
+          checkedDraft.sessions || planningDraftSessions,
+      });
+
+      if (result?.success === true) {
+        resetPlanningDraftState();
+        handleAfterSave();
+        return;
+      }
+
+      if (result?.has_conflict === true) {
+        setPlanningDraftResult({
+          ...result,
+          is_valid: true,
+          success: false,
+        });
+
+        Alert.alert(
+          text("Time conflict detected", "พบเวลาทับซ้อน"),
+          text(
+            "The schedule changed while you were reviewing it. Please edit the conflicting sessions and confirm again.",
+            "ระหว่างตรวจสอบมีตารางเวลาเปลี่ยนแปลง กรุณาแก้รอบที่ชนแล้วกดยืนยันอีกครั้ง"
+          )
+        );
+        return;
+      }
+
+      throw new Error(result?.message || "PLANNING_DRAFT_INVALID");
+    } catch (error) {
+      console.error("Confirm planning draft error:", error);
+
+      if (error?.message === "AUTH_REQUIRED") {
+        router.replace("/login");
+        return;
+      }
+
+      Alert.alert(
+        text("Error", "เกิดข้อผิดพลาด"),
+        getReadableSaveErrorMessage(error)
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const resetConflictState = () => {
@@ -939,7 +1290,10 @@ export default function AddTask() {
 
     const { safeStartTime, safeEndTime } = getSafeTaskTimeRange();
 
-    if (safeEndTime <= safeStartTime) {
+    if (
+      !planningEnabled &&
+      safeEndTime <= safeStartTime
+    ) {
       Alert.alert(
         text("Error", "เกิดข้อผิดพลาด"),
         text(
@@ -1050,7 +1404,10 @@ export default function AddTask() {
       return;
     }
 
-    if (!estimatedDuration || Number(estimatedDuration) <= 0) {
+    if (
+      !planningEnabled &&
+      (!estimatedDuration || Number(estimatedDuration) <= 0)
+    ) {
       Alert.alert(
         text("Error", "เกิดข้อผิดพลาด"),
         text(
@@ -1061,7 +1418,34 @@ export default function AddTask() {
       return;
     }
 
+    if (planningEnabled && !hasDeadline) {
+      Alert.alert(
+        text("Deadline Required", "ต้องมีเดดไลน์"),
+        text(
+          "Planning Mode requires a deadline so the app can distribute sessions before the final date.",
+          "กิจกรรมแบบวางแผนต้องมีเดดไลน์ เพื่อให้ระบบกระจายกิจกรรมย่อยก่อนวันสุดท้ายได้"
+        )
+      );
+      return;
+    }
+
     if (planningEnabled) {
+      const planningStartDay = new Date(startDateTime);
+      planningStartDay.setHours(0, 0, 0, 0);
+
+      const planningDeadlineDay = new Date(deadlineDate);
+      planningDeadlineDay.setHours(0, 0, 0, 0);
+
+      if (planningDeadlineDay < planningStartDay) {
+        Alert.alert(
+          text("Error", "เกิดข้อผิดพลาด"),
+          text(
+            "The last day of the plan cannot be earlier than the planning start date.",
+            "วันสุดท้ายของแผนต้องไม่อยู่ก่อนวันที่เริ่มวางแผน"
+          )
+        );
+        return;
+      }
       if (!totalPlannedMinutes || Number(totalPlannedMinutes) <= 0) {
         Alert.alert(
           text("Error", "เกิดข้อผิดพลาด"),
@@ -1094,12 +1478,52 @@ export default function AddTask() {
         );
         return;
       }
+      const preferredStartMinutes =
+        preferredStartTime.getHours() * 60 +
+        preferredStartTime.getMinutes();
+
+      const preferredEndMinutes =
+        preferredEndTime.getHours() * 60 +
+        preferredEndTime.getMinutes();
+
+      if (preferredEndMinutes <= preferredStartMinutes) {
+        Alert.alert(
+          text("Error", "เกิดข้อผิดพลาด"),
+          text(
+            "Preferred end time must be later than preferred start time.",
+            "เวลาสิ้นสุดของช่วงที่สะดวกต้องมากกว่าเวลาเริ่ม"
+          )
+        );
+        return;
+      }
+
+      const availableMinutesPerDay =
+        preferredEndMinutes - preferredStartMinutes;
+
+      if (
+        availableMinutesPerDay <
+        Number(sessionDurationMinutes)
+      ) {
+        Alert.alert(
+          text("Error", "เกิดข้อผิดพลาด"),
+          text(
+            "The preferred time range must be at least as long as one session.",
+            "ช่วงเวลาที่สะดวกต้องยาวอย่างน้อยเท่ากับระยะเวลาต่อรอบ"
+          )
+        );
+        return;
+      }
     }
 
     const taskPayload = buildTaskPayload();
 
     try {
       setIsSaving(true);
+
+      if (planningEnabled) {
+        await openPlanningDraftPreview(taskPayload);
+        return;
+      }
 
       const result = await addTask(taskPayload);
 
@@ -1183,13 +1607,64 @@ export default function AddTask() {
     Number(totalPlannedMinutes) / Number(sessionDurationMinutes || 1)
   );
 
-  const getBeforeDeadlineLabel = (day) => {
-    if (day === 0) return text("Same day", "วันเดียวกัน");
+  const planningDraftValidationErrors =
+    planningDraftResult?.validation_errors || [];
 
-    return isThai
-      ? `${day} วัน`
-      : `${day} day${day > 1 ? "s" : ""}`;
+  const planningDraftHasConflict =
+    planningDraftResult?.has_conflict === true;
+
+  const planningDraftIsValid =
+    planningDraftResult?.is_valid === true &&
+    planningDraftValidationErrors.length === 0;
+
+  const canConfirmPlanningDraft =
+    planningDraftIsValid &&
+    !planningDraftHasConflict &&
+    planningDraftResult?.success === true &&
+    !planningDraftChecking &&
+    !isSaving;
+
+  const getPlanningDraftSessionConflict = (sessionIndex) => {
+    return planningDraftResult?.conflict_instances?.find(
+      (item) => item.instance_index === sessionIndex + 1
+    );
   };
+
+  const getPlanningDraftValidationMessage = () => {
+    if (planningDraftValidationErrors.length === 0) {
+      return "";
+    }
+
+    const firstType = planningDraftValidationErrors[0]?.type;
+
+    if (firstType === "DRAFT_SESSIONS_OVERLAP") {
+      return text(
+        "Two sessions overlap each other. Please move one of them.",
+        "มีกิจกรรมย่อยในแผนชนกัน กรุณาเลื่อนเวลาอย่างน้อยหนึ่งรอบ"
+      );
+    }
+
+    if (firstType === "SESSION_OUTSIDE_PLANNING_WINDOW") {
+      return text(
+        "A session is outside the selected plan dates or preferred daily time range.",
+        "มีกิจกรรมย่อยอยู่นอกช่วงวันที่หรือเวลาที่สะดวกที่กำหนด"
+      );
+    }
+
+    if (firstType === "SESSION_DURATION_MISMATCH") {
+      return text(
+        "A session duration does not match the planned duration.",
+        "ระยะเวลาของกิจกรรมย่อยไม่ตรงกับระยะเวลาที่ระบบวางแผนไว้"
+      );
+    }
+
+    return text(
+      "The draft plan is invalid. Please adjust the sessions.",
+      "แผนชั่วคราวยังไม่ถูกต้อง กรุณาปรับวันหรือเวลาแล้วตรวจสอบอีกครั้ง"
+    );
+  };
+
+
   const getReadableSaveErrorMessage = (error) => {
     if (error?.message === "INVALID_ALL_DAY_TIME_RANGE") {
       return text(
@@ -1200,7 +1675,18 @@ export default function AddTask() {
     if (error?.message === "PLANNING_NOT_ENOUGH_FREE_TIME") {
       return text(
         "There is not enough available time before the deadline to create all planning sessions. Please extend the deadline or reduce the planned time.",
-        "เวลาว่างก่อนกำหนดส่งไม่พอสำหรับสร้างเซสชันวางแผนทั้งหมด กรุณาเลื่อนกำหนดส่งหรือลดเวลาที่ต้องวางแผน"
+        "เวลาว่างก่อนกำหนดส่งไม่พอสำหรับสร้างกิจกรรมย่อยวางแผนทั้งหมด กรุณาเลื่อนกำหนดส่งหรือลดเวลาที่ต้องวางแผน"
+      );
+    }
+    if (
+      error?.message === "PLANNING_DRAFT_INVALID" ||
+      error?.message === "PLANNING_DRAFT_REQUIRED" ||
+      error?.message === "PLANNING_DRAFT_SESSION_COUNT_MISMATCH" ||
+      error?.message === "PLANNING_DRAFT_INVALID_SESSION_TIME"
+    ) {
+      return text(
+        "The plan could not be prepared correctly. Please review the plan settings and try again.",
+        "ไม่สามารถเตรียมแผนได้อย่างถูกต้อง กรุณาตรวจสอบข้อมูลการวางแผนแล้วลองใหม่"
       );
     }
     return text(
@@ -1284,24 +1770,18 @@ export default function AddTask() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="none"
+        overScrollMode="never"
+        bounces={false}
+        alwaysBounceVertical={false}
+        alwaysBounceHorizontal={false}
       >
-        <View style={styles.topNav}>
-          <Pressable style={styles.navIconButton} onPress={handleBack}>
-            <Text style={styles.backIconText}>{"<"}</Text>
-          </Pressable>
 
+        <View style={styles.topNav}>
           <Text style={styles.navTitle}>
             {text("New Task", "เพิ่มกิจกรรม")}
           </Text>
-
-          <Pressable
-            style={[styles.doneButton, isSaving && styles.saveButtonDisabled]}
-            onPress={handleSave}
-            disabled={isSaving}
-          >
-            <Text style={styles.doneButtonText}>✓</Text>
-          </Pressable>
         </View>
+
         {/*เพิ่มปุ่มเลือกโหมดใต้หัวข้อเพิ่มกิจกรรม*/}
         <View style={styles.modeSwitchCard}>
           <Pressable
@@ -1317,8 +1797,7 @@ export default function AddTask() {
               setDurationDropdownOpen(false);
               setTotalPlanDropdownOpen(false);
               setSessionDropdownOpen(false);
-              setBeforeDeadlineDropdownOpen(false);
-              setStudyWindowDropdownOpen(false);
+
             }}
           >
             <Text
@@ -1339,15 +1818,17 @@ export default function AddTask() {
 
             onPress={() => {
               setTaskMode("time");
+              setIsAllDay(false);
               setPlanningEnabled(true);
+              setHasDeadline(true);
               setAcademicTaskType("study_plan");
               setRepeatType(RECURRENCE_TYPES.NONE);
               setRepeatDropdownOpen(false);
               setDurationDropdownOpen(false);
               setTotalPlanDropdownOpen(false);
               setSessionDropdownOpen(false);
-              setBeforeDeadlineDropdownOpen(false);
-              setStudyWindowDropdownOpen(false);
+
+
             }}
           >
             <Text
@@ -1417,128 +1898,249 @@ export default function AddTask() {
         </SectionCard>
 
         <SectionCard
-          title="ตารางเวลา"
+          title={taskMode === "time" ? "ช่วงวันที่ของแผน" : "ตารางเวลา"}
           icon="time-outline"
           open={scheduleSectionOpen}
-          onToggle={() => setScheduleSectionOpen((current) => !current)}
+          onToggle={() =>
+            setScheduleSectionOpen((current) => !current)
+          }
         >
-          <View style={styles.allDayRow}>
-            <View style={styles.allDayTextBox}>
-              <Text style={styles.allDayTitle}>{text("All day", "ทั้งวัน")}</Text>
-            </View>
+          {taskMode === "time" ? (
+            <>
+              <View style={styles.row}>
+                <View style={styles.deadlineLabelBox}>
+                  <Text style={styles.label}>
+                    เริ่มวางแผน
+                  </Text>
 
-            <Pressable
-              style={[
-                styles.allDayToggle,
-                isAllDay && styles.allDayToggleActive,
-              ]}
-              onPress={() => setIsAllDay((current) => !current)}
-            >
-              <View
-                style={[
-                  styles.allDayToggleKnob,
-                  isAllDay && styles.allDayToggleKnobActive,
-                ]}
-              />
-            </Pressable>
-          </View>
+                  <Pressable
+                    style={styles.infoButtonSmall}
+                    onPress={() =>
+                      Alert.alert(
+                        "เริ่มวางแผนตั้งแต่",
+                        "ระบบจะเริ่มค้นหาช่วงเวลาว่างสำหรับกิจกรรมย่อยตั้งแต่วันที่เลือกเป็นต้นไป"
+                      )
+                    }
+                  >
+                    <Ionicons
+                      name="information-circle-outline"
+                      size={17}
+                      color={COLORS.textMuted}
+                    />
+                  </Pressable>
+                </View>
 
-          <View style={styles.line} />
-          <View style={styles.row}>
-            <Text style={styles.label}>{text("Start", "เริ่ม")}</Text>
-
-            <Pressable
-              style={styles.pickerBox}
-              onPress={() => openPicker("start", "date")}
-            >
-              <Text style={styles.pickerText}>{formatDate(startDateTime)}</Text>
-            </Pressable>
-
-            {!isAllDay ? (
-              <Pressable
-                style={styles.timeBox}
-                onPress={() => openPicker("start", "time")}
-              >
-                <Text style={styles.pickerText}>{formatTime(startDateTime)}</Text>
-              </Pressable>
-            ) : (
-              <View style={styles.timeBoxDisabled}>
-                <Text style={styles.disabledTimeText}>
-                  {formatTime(getSafeTaskTimeRange().safeStartTime)}
-                </Text>
+                <Pressable
+                  style={styles.deadlineBox}
+                  onPress={() => openPicker("start", "date")}
+                >
+                  <Text style={styles.pickerText}>
+                    {formatDate(startDateTime)}
+                  </Text>
+                </Pressable>
               </View>
-            )}
 
-          </View>
+              <View style={styles.line} />
 
-          <View style={styles.line} />
+              <View style={styles.row}>
+                <View style={styles.deadlineLabelBox}>
+                  <Text style={styles.label}>
+                    วันสุดท้ายของแผน
+                  </Text>
 
-          {!isAllDay ? (
-            <View style={styles.row}>
-              <Text style={styles.label}>{text("End", "สิ้นสุด")}</Text>
+                  <Pressable
+                    style={styles.infoButtonSmall}
+                    onPress={() =>
+                      Alert.alert(
+                        "วันสุดท้ายของแผน",
+                        "กิจกรรมย่อยทั้งหมดต้องถูกจัดให้อยู่ภายในวันที่นี้"
+                      )
+                    }
+                  >
+                    <Ionicons
+                      name="information-circle-outline"
+                      size={17}
+                      color={COLORS.textMuted}
+                    />
+                  </Pressable>
+                </View>
 
-              <Pressable
-                style={styles.pickerBox}
-                onPress={() => openPicker("end", "date")}
-              >
-                <Text style={styles.pickerText}>{formatDate(endDateTime)}</Text>
-              </Pressable>
-
-              <Pressable
-                style={styles.timeBox}
-                onPress={() => openPicker("end", "time")}
-              >
-                <Text style={styles.pickerText}>{formatTime(endDateTime)}</Text>
-              </Pressable>
-            </View>
+                <Pressable
+                  style={styles.deadlineBox}
+                  onPress={() => openPicker("deadline", "date")}
+                >
+                  <Text style={styles.pickerText}>
+                    {formatDate(deadlineDate)}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
           ) : (
-            <View style={styles.allDayInfoBox}>
-              <Ionicons name="time-outline" size={16} color={COLORS.primary} />
-              <Text style={styles.allDayInfoText}>
-                {text(
-                  "This task will cover the selected day from 04:00 to 23:00.",
-                  "กิจกรรมนี้จะครอบคลุมช่วงเวลาของวันนั้น เช่น 04:00 ถึง 23:00"
+            <>
+              <View style={styles.allDayRow}>
+                <View style={styles.allDayTextBox}>
+                  <Text style={styles.allDayTitle}>
+                    {text("All day", "ทั้งวัน")}
+                  </Text>
+                </View>
+
+                <Pressable
+                  style={[
+                    styles.allDayToggle,
+                    isAllDay && styles.allDayToggleActive,
+                  ]}
+                  onPress={() =>
+                    setIsAllDay((current) => !current)
+                  }
+                >
+                  <View
+                    style={[
+                      styles.allDayToggleKnob,
+                      isAllDay && styles.allDayToggleKnobActive,
+                    ]}
+                  />
+                </Pressable>
+              </View>
+
+              <View style={styles.line} />
+
+              <View style={styles.row}>
+                <Text style={styles.label}>
+                  {text("Start", "เริ่ม")}
+                </Text>
+
+                <Pressable
+                  style={styles.pickerBox}
+                  onPress={() => openPicker("start", "date")}
+                >
+                  <Text style={styles.pickerText}>
+                    {formatDate(startDateTime)}
+                  </Text>
+                </Pressable>
+
+                {!isAllDay ? (
+                  <Pressable
+                    style={styles.timeBox}
+                    onPress={() => openPicker("start", "time")}
+                  >
+                    <Text style={styles.pickerText}>
+                      {formatTime(startDateTime)}
+                    </Text>
+                  </Pressable>
+                ) : (
+                  <View style={styles.timeBoxDisabled}>
+                    <Text style={styles.disabledTimeText}>
+                      {formatTime(
+                        getSafeTaskTimeRange().safeStartTime
+                      )}
+                    </Text>
+                  </View>
                 )}
-              </Text>
-            </View>
+              </View>
+
+              <View style={styles.line} />
+
+              {!isAllDay ? (
+                <View style={styles.row}>
+                  <Text style={styles.label}>
+                    {text("End", "สิ้นสุด")}
+                  </Text>
+
+                  <Pressable
+                    style={styles.pickerBox}
+                    onPress={() => openPicker("end", "date")}
+                  >
+                    <Text style={styles.pickerText}>
+                      {formatDate(endDateTime)}
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={styles.timeBox}
+                    onPress={() => openPicker("end", "time")}
+                  >
+                    <Text style={styles.pickerText}>
+                      {formatTime(endDateTime)}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              <View style={styles.line} />
+
+              <View style={styles.allDayRow}>
+                <View style={styles.allDayTextBox}>
+                  <View style={styles.deadlineTitleRow}>
+                    <Text style={styles.allDayTitle}>
+                      {text("Has deadline", "มีเดดไลน์")}
+                    </Text>
+
+                    <Pressable
+                      style={styles.infoButtonSmall}
+                      onPress={() =>
+                        Alert.alert(
+                          text("Deadline", "เดดไลน์"),
+                          text(
+                            "Turn this on when the task must be completed by a specific date.",
+                            "เปิดเมื่อต้องการกำหนดวันที่ล่าสุดที่ควรทำกิจกรรมนี้ให้เสร็จ"
+                          )
+                        )
+                      }
+                    >
+                      <Ionicons
+                        name="information-circle-outline"
+                        size={17}
+                        color={COLORS.textMuted}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+
+                <Pressable
+                  style={[
+                    styles.allDayToggle,
+                    hasDeadline && styles.allDayToggleActive,
+                  ]}
+                  onPress={() => setHasDeadline((current) => !current)}
+                >
+                  <View
+                    style={[
+                      styles.allDayToggleKnob,
+                      hasDeadline && styles.allDayToggleKnobActive,
+                    ]}
+                  />
+                </Pressable>
+              </View>
+
+              {hasDeadline ? (
+                <>
+                  <View style={styles.line} />
+
+                  <View style={styles.row}>
+                    <View style={styles.deadlineLabelBox}>
+                      <Text style={styles.label}>
+                        {repeatType !== RECURRENCE_TYPES.NONE
+                          ? text(
+                              "Deadline for each occurrence",
+                              "เดดไลน์ของแต่ละรอบ"
+                            )
+                          : text("Deadline", "เดดไลน์")}
+                      </Text>
+                    </View>
+
+                    <Pressable
+                      style={styles.deadlineBox}
+                      onPress={() => openPicker("deadline", "date")}
+                    >
+                      <Text style={styles.pickerText}>
+                        {formatDate(deadlineDate)}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : null}
+            </>
           )}
-
-          <View style={styles.line} />
-          <View style={styles.row}>
-            <View style={styles.deadlineLabelBox}>
-              <Text style={styles.label}>
-                {taskMode === "time"
-                  ? "วันสุดท้ายของแผน"
-                  : repeatType !== RECURRENCE_TYPES.NONE
-                    ? "วันที่ต้องเสร็จของแต่ละรอบ"
-                    : "วันที่ต้องเสร็จ"}
-              </Text>
-
-              <Pressable
-                style={styles.infoButtonSmall}
-                onPress={() =>
-                  Alert.alert(
-                    "วันที่ต้องเสร็จ",
-                    "วันที่ต้องเสร็จใช้สำหรับกิจกรรมที่ควรทำให้เสร็จภายในวันใดวันหนึ่ง เช่น อ่านหนังสือสอบ ทำรายงาน หรือเตรียมสไลด์ ระบบจะใช้ข้อมูลนี้ช่วยจัดลำดับกิจกรรมที่ควรแนะนำก่อน"
-                  )
-                }
-              >
-                <Ionicons
-                  name="information-circle-outline"
-                  size={17}
-                  color={COLORS.textMuted}
-                />
-              </Pressable>
-            </View>
-
-            <Pressable
-              style={styles.deadlineBox}
-              onPress={() => openPicker("deadline", "date")}
-            >
-              <Text style={styles.pickerText}>{formatDate(deadlineDate)}</Text>
-            </Pressable>
-          </View>
-
         </SectionCard>
 
         <SectionCard
@@ -1585,67 +2187,82 @@ export default function AddTask() {
             })}
           </View>
 
-          <View style={styles.line} />
+          {taskMode === "todo" ? (
+            <>
+              <View style={styles.line} />
 
-          <View style={styles.labelWithInfo}>
-            <Text style={styles.subSectionTitleNoMargin}>
-              ระยะเวลาที่คาดว่าจะใช้
-            </Text>
+              <View style={styles.labelWithInfo}>
+                <Text style={styles.subSectionTitleNoMargin}>
+                  ระยะเวลาที่คาดว่าจะใช้
+                </Text>
 
-            <Pressable
-              style={styles.infoButton}
-              onPress={() =>
-                Alert.alert("ระยะเวลาที่คาดว่าจะใช้", getDurationDescription())
-              }
-            >
-              <Ionicons
-                name="information-circle-outline"
-                size={18}
-                color={COLORS.textMuted}
-              />
-            </Pressable>
-          </View>
-
-          <Pressable
-            style={styles.dropdownButton}
-            onPress={() => setDurationDropdownOpen((current) => !current)}
-          >
-            <Text style={styles.dropdownButtonText}>
-              {formatDuration(estimatedDuration)}
-            </Text>
-
-            <Ionicons
-              name={durationDropdownOpen ? "chevron-up" : "chevron-down"}
-              size={18}
-              color={COLORS.textMuted}
-            />
-          </Pressable>
-
-          {durationDropdownOpen ? (
-            <View style={styles.dropdownMenu}>
-              {durationOptions.map((duration) => (
                 <Pressable
-                  key={duration}
-                  style={[
-                    styles.dropdownItem,
-                    estimatedDuration === duration && styles.dropdownItemActive,
-                  ]}
-                  onPress={() => {
-                    setEstimatedDuration(duration);
-                    setDurationDropdownOpen(false);
-                  }}
+                  style={styles.infoButton}
+                  onPress={() =>
+                    Alert.alert(
+                      "ระยะเวลาที่คาดว่าจะใช้",
+                      getDurationDescription()
+                    )
+                  }
                 >
-                  <Text
-                    style={[
-                      styles.dropdownItemText,
-                      estimatedDuration === duration && styles.dropdownItemTextActive,
-                    ]}
-                  >
-                    {formatDuration(duration)}
-                  </Text>
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={18}
+                    color={COLORS.textMuted}
+                  />
                 </Pressable>
-              ))}
-            </View>
+              </View>
+
+              <Pressable
+                style={styles.dropdownButton}
+                onPress={() =>
+                  setDurationDropdownOpen((current) => !current)
+                }
+              >
+                <Text style={styles.dropdownButtonText}>
+                  {formatDuration(estimatedDuration)}
+                </Text>
+
+                <Ionicons
+                  name={
+                    durationDropdownOpen
+                      ? "chevron-up"
+                      : "chevron-down"
+                  }
+                  size={18}
+                  color={COLORS.textMuted}
+                />
+              </Pressable>
+
+              {durationDropdownOpen ? (
+                <View style={styles.dropdownMenu}>
+                  {durationOptions.map((duration) => (
+                    <Pressable
+                      key={duration}
+                      style={[
+                        styles.dropdownItem,
+                        estimatedDuration === duration &&
+                        styles.dropdownItemActive,
+                      ]}
+                      onPress={() => {
+                        setEstimatedDuration(duration);
+                        setDurationDropdownOpen(false);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.dropdownItemText,
+                          estimatedDuration === duration &&
+                          styles.dropdownItemTextActive,
+                        ]}
+                      >
+                        {formatDuration(duration)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+            </>
           ) : null}
 
           {taskMode === "todo" ? (
@@ -1762,44 +2379,64 @@ export default function AddTask() {
 
               {repeatDropdownOpen && repeatType === RECURRENCE_TYPES.WEEKLY && (
                 <>
-                  <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>ทำซ้ำทุก</Text>
+                  <View style={styles.intervalStepperRow}>
+                    <Text style={styles.intervalStepperLabel}>ทำซ้ำทุก</Text>
 
-                    <TextInput
-                      style={styles.numberInput}
-                      value={String(weekInterval)}
-                      onChangeText={(value) =>
-                        handlePositiveNumberChange(value, setWeekInterval, 12)
-                      }
-                      keyboardType="number-pad"
-                      placeholder="1"
-                      placeholderTextColor={COLORS.textMuted}
-                      maxLength={2}
-                    />
-
-                    <Text style={styles.smallLabel}>สัปดาห์</Text>
-                  </View>
-
-                  <View style={styles.customDayContainer}>
-                    {weekIntervalOptions.map((week) => (
+                    <View style={styles.intervalStepperControls}>
                       <Pressable
-                        key={week}
                         style={[
-                          styles.dayButton,
-                          Number(weekInterval) === week && styles.dayButtonActive,
+                          styles.intervalStepperButton,
+                          (Number(weekInterval) || 1) <= 1 &&
+                            styles.intervalStepperButtonDisabled,
                         ]}
-                        onPress={() => setWeekInterval(week)}
+                        disabled={(Number(weekInterval) || 1) <= 1}
+                        onPress={() =>
+                          setWeekInterval((current) =>
+                            Math.max(1, (Number(current) || 1) - 1)
+                          )
+                        }
                       >
-                        <Text
-                          style={[
-                            styles.dayButtonText,
-                            Number(weekInterval) === week && styles.dayButtonTextActive,
-                          ]}
-                        >
-                          {week}
-                        </Text>
+                        <Ionicons
+                          name="remove"
+                          size={20}
+                          color={
+                            (Number(weekInterval) || 1) <= 1
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
                       </Pressable>
-                    ))}
+
+                      <View style={styles.intervalStepperValueBox}>
+                        <Text style={styles.intervalStepperValue}>
+                          {Math.min(12, Math.max(1, Number(weekInterval) || 1))} สัปดาห์
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        style={[
+                          styles.intervalStepperButton,
+                          (Number(weekInterval) || 1) >= 12 &&
+                            styles.intervalStepperButtonDisabled,
+                        ]}
+                        disabled={(Number(weekInterval) || 1) >= 12}
+                        onPress={() =>
+                          setWeekInterval((current) =>
+                            Math.min(12, (Number(current) || 1) + 1)
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name="add"
+                          size={20}
+                          color={
+                            (Number(weekInterval) || 1) >= 12
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
+                      </Pressable>
+                    </View>
                   </View>
 
                   <Text style={styles.subSectionTitle}>ทำซ้ำในวัน</Text>
@@ -1828,44 +2465,64 @@ export default function AddTask() {
 
               {repeatDropdownOpen && repeatType === RECURRENCE_TYPES.MONTHLY && (
                 <>
-                  <View style={styles.inputRow}>
-                    <Text style={styles.smallLabel}>ทำซ้ำทุก</Text>
+                  <View style={styles.intervalStepperRow}>
+                    <Text style={styles.intervalStepperLabel}>ทำซ้ำทุก</Text>
 
-                    <TextInput
-                      style={styles.numberInput}
-                      value={String(monthInterval)}
-                      onChangeText={(value) =>
-                        handlePositiveNumberChange(value, setMonthInterval, 12)
-                      }
-                      keyboardType="number-pad"
-                      placeholder="1"
-                      placeholderTextColor={COLORS.textMuted}
-                      maxLength={2}
-                    />
-
-                    <Text style={styles.smallLabel}>เดือน</Text>
-                  </View>
-
-                  <View style={styles.customDayContainer}>
-                    {monthIntervalOptions.map((month) => (
+                    <View style={styles.intervalStepperControls}>
                       <Pressable
-                        key={month}
                         style={[
-                          styles.dayButton,
-                          Number(monthInterval) === month && styles.dayButtonActive,
+                          styles.intervalStepperButton,
+                          (Number(monthInterval) || 1) <= 1 &&
+                            styles.intervalStepperButtonDisabled,
                         ]}
-                        onPress={() => setMonthInterval(month)}
+                        disabled={(Number(monthInterval) || 1) <= 1}
+                        onPress={() =>
+                          setMonthInterval((current) =>
+                            Math.max(1, (Number(current) || 1) - 1)
+                          )
+                        }
                       >
-                        <Text
-                          style={[
-                            styles.dayButtonText,
-                            Number(monthInterval) === month && styles.dayButtonTextActive,
-                          ]}
-                        >
-                          {month}
-                        </Text>
+                        <Ionicons
+                          name="remove"
+                          size={20}
+                          color={
+                            (Number(monthInterval) || 1) <= 1
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
                       </Pressable>
-                    ))}
+
+                      <View style={styles.intervalStepperValueBox}>
+                        <Text style={styles.intervalStepperValue}>
+                          {Math.min(12, Math.max(1, Number(monthInterval) || 1))} เดือน
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        style={[
+                          styles.intervalStepperButton,
+                          (Number(monthInterval) || 1) >= 12 &&
+                            styles.intervalStepperButtonDisabled,
+                        ]}
+                        disabled={(Number(monthInterval) || 1) >= 12}
+                        onPress={() =>
+                          setMonthInterval((current) =>
+                            Math.min(12, (Number(current) || 1) + 1)
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name="add"
+                          size={20}
+                          color={
+                            (Number(monthInterval) || 1) >= 12
+                              ? COLORS.textMuted
+                              : COLORS.primary
+                          }
+                        />
+                      </Pressable>
+                    </View>
                   </View>
 
                   <View style={styles.inputRow}>
@@ -2057,95 +2714,21 @@ export default function AddTask() {
               </View>
             ) : null}
 
-            <View style={styles.labelWithInfo}>
-              <Text style={styles.subSectionTitleNoMargin}>วางแผนก่อนกำหนดส่ง</Text>
 
-              <Pressable
-                style={styles.infoButton}
-                onPress={() =>
-                  Alert.alert(
-                    "วางแผนก่อนกำหนดส่ง",
-                    "ใช้กำหนดว่าควรจัดรอบของกิจกรรมให้เสร็จก่อนวันกำหนดส่งกี่วัน"
-                  )
-                }
-              >
-                <Ionicons
-                  name="information-circle-outline"
-                  size={18}
-                  color={COLORS.textMuted}
-                />
-              </Pressable>
-            </View>
-
-            <Pressable
-              style={styles.dropdownButton}
-              onPress={() => setBeforeDeadlineDropdownOpen((current) => !current)}
-            >
-              <Text style={styles.dropdownButtonText}>
-                {getBeforeDeadlineLabel(planBeforeDeadlineDays)}
-              </Text>
-
-              <Ionicons
-                name={beforeDeadlineDropdownOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={COLORS.textMuted}
-              />
-            </Pressable>
-
-            {beforeDeadlineDropdownOpen ? (
-              <View style={styles.dropdownMenu}>
-                {beforeDeadlineOptions.map((day) => (
-                  <Pressable
-                    key={day}
-                    style={[
-                      styles.dropdownItem,
-                      planBeforeDeadlineDays === day && styles.dropdownItemActive,
-                    ]}
-                    onPress={() => {
-                      setPlanBeforeDeadlineDays(day);
-                      setBeforeDeadlineDropdownOpen(false);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.dropdownItemText,
-                        planBeforeDeadlineDays === day &&
-                        styles.dropdownItemTextActive,
-                      ]}
-                    >
-                      {getBeforeDeadlineLabel(day)}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-
-            <View style={styles.line} />
-
-            <Pressable
-              style={styles.optionRow}
-              onPress={() => setAutoSchedule((prev) => !prev)}
-            >
-              <View>
-                <Text style={styles.optionTitle}>จัดลงช่วงเวลาว่างอัตโนมัติ</Text>
-              </View>
-
-              <Text style={styles.optionStatus}>{autoSchedule ? "เปิด" : "ปิด"}</Text>
-            </Pressable>
 
             <View style={styles.line} />
 
             <View style={styles.labelWithInfo}>
               <Text style={styles.subSectionTitleNoMargin}>
-                ช่วงเวลาที่ต้องการอ่าน
+                เวลาที่สะดวกในแต่ละวัน
               </Text>
 
               <Pressable
                 style={styles.infoButton}
                 onPress={() =>
                   Alert.alert(
-                    "ช่วงเวลาที่ต้องการอ่าน",
-                    "ระบบจะจัดรอบของกิจกรรมเฉพาะในช่วงเวลาที่เลือก เช่น ช่วงเช้า ช่วงบ่าย หรือช่วงเย็น"
+                    "เวลาที่สะดวกในแต่ละวัน",
+                    "ระบบจะจัดกิจกรรมย่อยเฉพาะในช่วงเวลานี้ของแต่ละวัน โดยหลีกเลี่ยงกิจกรรมเดิมที่มีอยู่"
                   )
                 }
               >
@@ -2157,66 +2740,70 @@ export default function AddTask() {
               </Pressable>
             </View>
 
-            <Pressable
-              style={styles.dropdownButton}
-              onPress={() => setStudyWindowDropdownOpen((current) => !current)}
-            >
-              <Text style={styles.dropdownButtonText}>
-                {studyWindowOptions.find(
-                  (option) => option.value === preferredStudyWindow
-                )?.label || "ช่วงเย็น"}
+            <View style={styles.preferredTimeRow}>
+              <View style={styles.preferredTimeColumn}>
+                <Text style={styles.preferredTimeLabel}>
+                  เริ่ม
+                </Text>
+
+                <Pressable
+                  style={styles.preferredTimeButton}
+                  onPress={() =>
+                    openPicker("planningStart", "time")
+                  }
+                >
+                  <Ionicons
+                    name="time-outline"
+                    size={18}
+                    color={COLORS.primary}
+                  />
+
+                  <Text style={styles.preferredTimeButtonText}>
+                    {formatTime(preferredStartTime)}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <Text style={styles.preferredTimeSeparator}>
+                ถึง
               </Text>
 
+              <View style={styles.preferredTimeColumn}>
+                <Text style={styles.preferredTimeLabel}>
+                  สิ้นสุด
+                </Text>
+
+                <Pressable
+                  style={styles.preferredTimeButton}
+                  onPress={() =>
+                    openPicker("planningEnd", "time")
+                  }
+                >
+                  <Ionicons
+                    name="time-outline"
+                    size={18}
+                    color={COLORS.primary}
+                  />
+
+                  <Text style={styles.preferredTimeButtonText}>
+                    {formatTime(preferredEndTime)}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.planningInfoBox}>
               <Ionicons
-                name={studyWindowDropdownOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={COLORS.textMuted}
+                name="sparkles-outline"
+                size={17}
+                color={COLORS.primary}
               />
-            </Pressable>
 
-            {studyWindowDropdownOpen ? (
-              <View style={styles.dropdownMenu}>
-                {studyWindowOptions.map((option) => (
-                  <Pressable
-                    key={option.value}
-                    style={[
-                      styles.dropdownItem,
-                      preferredStudyWindow === option.value &&
-                      styles.dropdownItemActive,
-                    ]}
-                    onPress={() => {
-                      setPreferredStudyWindow(option.value);
-                      setStudyWindowDropdownOpen(false);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.dropdownItemText,
-                        preferredStudyWindow === option.value &&
-                        styles.dropdownItemTextActive,
-                      ]}
-                    >
-                      {option.label} · {option.description}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-
-            <View style={styles.line} />
-
-            <Pressable
-              style={styles.optionRow}
-              onPress={() => setAddReviewSession((prev) => !prev)}
-            >
-              <View>
-                <Text style={styles.optionTitle}>เพิ่มรอบทบทวน</Text>
-              </View>
-
-              <Text style={styles.optionStatus}>
-                {addReviewSession ? "เปิด" : "ปิด"}
+              <Text style={styles.planningInfoText}>
+                ระบบจะกระจายกิจกรรมย่อยวันละ 1 รอบก่อน
+                และจะจัดหลายรอบในวันเดียวกันเฉพาะเมื่อจำนวนวันไม่เพียงพอ
               </Text>
-            </Pressable>
+            </View>
 
             <View style={styles.planningSummaryBox}>
               <Text style={styles.planningSummaryTitle}>สรุปการวางแผน</Text>
@@ -2243,8 +2830,12 @@ export default function AddTask() {
         >
           <Text style={styles.saveText}>
             {isSaving
-              ? text("Checking...", "กำลังตรวจสอบ...")
-              : text("Save Task", "บันทึกกิจกรรม")}
+              ? planningEnabled
+                ? text("Creating plan...", "กำลังจัดแผน...")
+                : text("Checking...", "กำลังตรวจสอบ...")
+              : planningEnabled
+                ? text("Review Plan", "ตรวจสอบแผน")
+                : text("Save Task", "บันทึกกิจกรรม")}
           </Text>
         </Pressable>
 
@@ -2253,17 +2844,263 @@ export default function AddTask() {
         </Pressable>
       </ScrollView>
 
-      <TimePickerModal
-        visible={timePickerVisible}
-        title={
-          timePickerTarget === "start"
-            ? text("Select start time", "เลือกเวลาเริ่ม")
-            : text("Select end time", "เลือกเวลาสิ้นสุด")
-        }
-        initialDate={getPickerValue(timePickerTarget)}
-        onClose={closeTimePicker}
-        onConfirm={handleConfirmTime}
-      />
+
+
+      <Modal
+        visible={planningDraftVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPlanningDraftVisible(false)}
+      >
+        <View style={styles.planningDraftOverlay}>
+          <View style={styles.planningDraftModalBox}>
+            <View style={styles.planningDraftHeader}>
+              <View style={styles.planningDraftHeaderTextBox}>
+                <Text style={styles.planningDraftTitle}>
+                  {text("Review Plan", "ตรวจสอบแผนกิจกรรม")}
+                </Text>
+              </View>
+
+              <Pressable
+                style={styles.planningDraftCloseButton}
+                onPress={() => setPlanningDraftVisible(false)}
+                disabled={isSaving}
+              >
+                <Ionicons
+                  name="close"
+                  size={24}
+                  color={COLORS.text}
+                />
+              </Pressable>
+            </View>
+
+            {planningDraftResult?.summary
+              ?.has_multiple_sessions_in_one_day ? (
+              <View style={styles.planningDraftWarningBox}>
+                <Ionicons
+                  name="warning-outline"
+                  size={19}
+                  color={COLORS.warning}
+                />
+                <Text style={styles.planningDraftWarningText}>
+                  {text(
+                    "The available dates are not enough for one session per day, so some days contain more than one session.",
+                    "จำนวนวันที่ว่างไม่พอสำหรับวันละ 1 รอบ ระบบจึงจำเป็นต้องจัดบางวันมากกว่า 1 รอบ"
+                  )}
+                </Text>
+              </View>
+            ) : null}
+
+            {planningDraftChecking ? (
+              <View style={styles.planningDraftCheckingBox}>
+                <Text style={styles.planningDraftCheckingText}>
+                  {text(
+                    "Checking conflicts...",
+                    "กำลังตรวจสอบเวลาทับซ้อน..."
+                  )}
+                </Text>
+              </View>
+            ) : null}
+
+            {planningDraftHasConflict ? (
+              <View style={styles.planningDraftErrorSummary}>
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={20}
+                  color={COLORS.danger}
+                />
+                <Text style={styles.planningDraftErrorSummaryText}>
+                  {text(
+                    "Some sessions conflict with existing tasks. Edit the red sessions before confirming.",
+                    "บางรอบชนกับกิจกรรมเดิม กรุณาแก้รอบสีแดงก่อนยืนยันแผน"
+                  )}
+                </Text>
+              </View>
+            ) : null}
+
+            {!planningDraftChecking &&
+              planningDraftValidationErrors.length > 0 ? (
+              <View style={styles.planningDraftErrorSummary}>
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={20}
+                  color={COLORS.danger}
+                />
+                <Text style={styles.planningDraftErrorSummaryText}>
+                  {getPlanningDraftValidationMessage()}
+                </Text>
+              </View>
+            ) : null}
+
+            <ScrollView
+              style={styles.planningDraftList}
+              contentContainerStyle={styles.planningDraftListContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {planningDraftSessions.map((session, index) => {
+                const sessionStart = normalizeDate(session.start_time);
+                const sessionEnd = normalizeDate(session.end_time);
+                const durationMinutes =
+                  isValidDate(sessionStart) && isValidDate(sessionEnd)
+                    ? Math.max(
+                      1,
+                      Math.round(
+                        (sessionEnd.getTime() -
+                          sessionStart.getTime()) /
+                        (1000 * 60)
+                      )
+                    )
+                    : 0;
+
+                const conflictForSession =
+                  getPlanningDraftSessionConflict(index);
+                const sessionHasConflict =
+                  (conflictForSession?.conflicts || []).length > 0;
+
+                return (
+                  <View
+                    key={`${sessionStart?.getTime?.() || index}-${index}`}
+                    style={[
+                      styles.planningDraftSessionCard,
+                      sessionHasConflict &&
+                      styles.planningDraftSessionCardConflict,
+                    ]}
+                  >
+                    <View style={styles.planningDraftSessionHeader}>
+                      <View style={styles.planningDraftSessionNumberBox}>
+                        <Text style={styles.planningDraftSessionNumber}>
+                          {index + 1}
+                        </Text>
+                      </View>
+
+                      <View style={styles.planningDraftSessionTextBox}>
+                        <Text
+                          style={styles.planningDraftSessionTitle}
+                          numberOfLines={2}
+                        >
+                          {title.trim()}
+                        </Text>
+                        <Text style={styles.planningDraftSessionMeta}>
+                          {text("Session", "รอบที่")} {index + 1}{" "}
+                          {text("of", "จาก")} {planningDraftSessions.length}
+                          {" · "}
+                          {formatDuration(durationMinutes)}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.planningDraftPickerRow}>
+                      <Pressable
+                        style={styles.planningDraftPickerButton}
+                        onPress={() =>
+                          openPlanningDraftPicker(index, "date")
+                        }
+                        disabled={planningDraftChecking || isSaving}
+                      >
+                        <Ionicons
+                          name="calendar-outline"
+                          size={18}
+                          color={COLORS.primary}
+                        />
+                        <Text style={styles.planningDraftPickerText}>
+                          {isValidDate(sessionStart)
+                            ? formatDate(sessionStart)
+                            : "-"}
+                        </Text>
+                      </Pressable>
+
+                      <Pressable
+                        style={styles.planningDraftPickerButton}
+                        onPress={() =>
+                          openPlanningDraftPicker(index, "time")
+                        }
+                        disabled={planningDraftChecking || isSaving}
+                      >
+                        <Ionicons
+                          name="time-outline"
+                          size={18}
+                          color={COLORS.primary}
+                        />
+                        <Text style={styles.planningDraftPickerText}>
+                          {isValidDate(sessionStart)
+                            ? `${formatTime(sessionStart)} - ${formatTime(
+                              sessionEnd
+                            )}`
+                            : "-"}
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {sessionHasConflict ? (
+                      <View style={styles.planningDraftConflictBox}>
+                        <Text style={styles.planningDraftConflictTitle}>
+                          {text(
+                            "Conflicts with:",
+                            "เวลานี้ชนกับ:"
+                          )}
+                        </Text>
+
+                        {(conflictForSession.conflicts || []).map(
+                          (conflict, conflictIndex) => (
+                            <Text
+                              key={`${conflict.task_id}-${conflictIndex}`}
+                              style={styles.planningDraftConflictText}
+                            >
+                              • {conflict.title ||
+                                text(
+                                  "Untitled Task",
+                                  "กิจกรรมไม่มีชื่อ"
+                                )}{" "}
+                              {formatTime(conflict.start_time)} -{" "}
+                              {formatTime(conflict.end_time)}
+                            </Text>
+                          )
+                        )}
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            <View
+              style={[
+                styles.planningDraftFooter,
+                {
+                  paddingBottom: Math.max(insets.bottom, 48) + 12,
+                },
+              ]}
+            >
+              <Pressable
+                style={styles.planningDraftBackButton}
+                onPress={() => setPlanningDraftVisible(false)}
+                disabled={isSaving}
+              >
+                <Text style={styles.planningDraftBackButtonText}>
+                  {text("Back to edit", "กลับไปแก้ข้อมูล")}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.planningDraftConfirmButton,
+                  !canConfirmPlanningDraft &&
+                  styles.planningDraftConfirmButtonDisabled,
+                ]}
+                onPress={handleConfirmPlanningDraft}
+                disabled={!canConfirmPlanningDraft}
+              >
+                <Text style={styles.planningDraftConfirmButtonText}>
+                  {isSaving
+                    ? text("Saving...", "กำลังบันทึก...")
+                    : text("Confirm Plan", "ยืนยันแผน")}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={conflictModalVisible}
@@ -2617,13 +3454,13 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
-    paddingTop: 48,
+    paddingTop: 22,
     paddingBottom: 40,
   },
   topNav: {
-    flexDirection: "row",
+    minHeight: 44,
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "center",
     marginBottom: 14,
   },
   navIconButton: {
@@ -3030,6 +3867,52 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
+  intervalStepperRow: {
+    paddingVertical: 14,
+    gap: 10,
+  },
+  intervalStepperLabel: {
+    fontSize: 17,
+    color: COLORS.text,
+    fontWeight: "700",
+  },
+  intervalStepperControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  intervalStepperButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primaryLight,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  intervalStepperButtonDisabled: {
+    opacity: 0.4,
+    backgroundColor: COLORS.cardSoft,
+    borderColor: COLORS.border,
+  },
+  intervalStepperValueBox: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.cardSoft,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+  },
+  intervalStepperValue: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: COLORS.text,
+    textAlign: "center",
+  },
   customDayContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -3118,6 +4001,232 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 18,
     fontWeight: "bold",
+  },
+  planningDraftOverlay: {
+    flex: 1,
+    backgroundColor: COLORS.overlay || "rgba(0, 0, 0, 0.45)",
+    justifyContent: "flex-end",
+  },
+  planningDraftModalBox: {
+    width: "100%",
+    height: "90%",
+    backgroundColor: COLORS.background,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    paddingBottom: 0,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    overflow: "hidden",
+  },
+  planningDraftHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 12,
+  },
+  planningDraftHeaderTextBox: {
+    flex: 1,
+  },
+  planningDraftTitle: {
+    fontSize: 25,
+    fontWeight: "900",
+    color: COLORS.text,
+  },
+  planningDraftCloseButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: COLORS.card,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  planningDraftWarningBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#FFF7D6",
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+    marginBottom: 10,
+  },
+  planningDraftWarningText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.text,
+    fontWeight: "700",
+  },
+  planningDraftCheckingBox: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 10,
+  },
+  planningDraftCheckingText: {
+    textAlign: "center",
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.primary,
+  },
+  planningDraftErrorSummary: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+    marginBottom: 10,
+  },
+  planningDraftErrorSummaryText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.danger,
+    fontWeight: "700",
+  },
+  planningDraftList: {
+    flex: 1,
+    minHeight: 0,
+  },
+  planningDraftListContent: {
+    paddingBottom: 18,
+  },
+  planningDraftSessionCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 20,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 12,
+  },
+  planningDraftSessionCardConflict: {
+    borderColor: "#F87171",
+    backgroundColor: "#FFF7F7",
+  },
+  planningDraftSessionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 12,
+  },
+  planningDraftSessionNumberBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: COLORS.primaryLight || "#EAF4FF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  planningDraftSessionNumber: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.primary,
+  },
+  planningDraftSessionTextBox: {
+    flex: 1,
+  },
+  planningDraftSessionTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.text,
+  },
+  planningDraftSessionMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+  },
+  planningDraftPickerRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  planningDraftPickerButton: {
+    flex: 1,
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    backgroundColor: COLORS.cardSoft,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  planningDraftPickerText: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.text,
+    textAlign: "center",
+  },
+  planningDraftConflictBox: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: "#FEE2E2",
+  },
+  planningDraftConflictTitle: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: COLORS.danger,
+    marginBottom: 4,
+  },
+  planningDraftConflictText: {
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: COLORS.danger,
+  },
+  planningDraftFooter: {
+    flexDirection: "row",
+    flexShrink: 0,
+    gap: 10,
+    paddingTop: 10,
+    backgroundColor: COLORS.background,
+  },
+  planningDraftBackButton: {
+    flex: 1,
+    minHeight: 50,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  planningDraftBackButtonText: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.text,
+  },
+  planningDraftConfirmButton: {
+    flex: 1,
+    minHeight: 50,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primary,
+  },
+  planningDraftConfirmButtonDisabled: {
+    opacity: 0.45,
+  },
+  planningDraftConfirmButtonText: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: COLORS.textLight,
   },
   conflictOverlay: {
     flex: 1,
@@ -3251,6 +4360,18 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: COLORS.text,
   },
+  deadlineTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  deadlineHelperText: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 17,
+    color: COLORS.textMuted,
+    fontWeight: "600",
+  },
 
   /*   allDayDescription: {
       marginTop: 3,
@@ -3278,6 +4399,9 @@ const styles = StyleSheet.create({
 
   allDayToggleActive: {
     backgroundColor: COLORS.primary,
+  },
+  toggleDisabled: {
+    opacity: 0.65,
   },
 
   allDayToggleKnob: {
@@ -3326,5 +4450,64 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: COLORS.text,
     fontWeight: "700",
+  },
+  planningInfoBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 12,
+    marginTop: 14,
+    borderRadius: 12,
+    backgroundColor: "#EFF6FF",
+  },
+
+  planningInfoText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.textSecondary,
+  },
+  preferredTimeRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 10,
+    marginTop: 8,
+    marginBottom: 14,
+  },
+
+  preferredTimeColumn: {
+    flex: 1,
+  },
+
+  preferredTimeLabel: {
+    marginBottom: 7,
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+  },
+
+  preferredTimeButton: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    backgroundColor: COLORS.cardSoft,
+  },
+
+  preferredTimeButtonText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: COLORS.text,
+  },
+
+  preferredTimeSeparator: {
+    paddingBottom: 16,
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.textMuted,
   },
 });

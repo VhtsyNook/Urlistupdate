@@ -21,7 +21,6 @@ import {
   updateTaskStatus,
 } from "../src/services/taskService";
 import {
-  formatDuration,
   getBestRecommendationForDate,
   normalizeDate,
 } from "../src/utils/smartScheduler";
@@ -122,6 +121,22 @@ export default function HomeScreen() {
       month: "short",
       day: "numeric",
     });
+  };
+
+  const formatLocalizedDuration = (minutes) => {
+    const value = Math.max(0, Number(minutes) || 0);
+    const hours = Math.floor(value / 60);
+    const remainingMinutes = value % 60;
+
+    if (language === "th") {
+      if (hours === 0) return `${remainingMinutes} นาที`;
+      if (remainingMinutes === 0) return `${hours} ชม.`;
+      return `${hours} ชม. ${remainingMinutes} นาที`;
+    }
+
+    if (hours === 0) return `${remainingMinutes} min`;
+    if (remainingMinutes === 0) return `${hours} hr`;
+    return `${hours} hr ${remainingMinutes} min`;
   };
 
   const getUserName = () => {
@@ -353,12 +368,19 @@ export default function HomeScreen() {
     minSlotMinutes: 15,
     startHour: 4,
     endHour: 23,
+    endMinute: 59,
     maxRecommendations: 3,
   });
 
-  const firstFreeSlot = smartFreeTimeResult.slots[0] || null;
-  const bestRecommendation = smartFreeTimeResult.best;
-  const suggestedTask = bestRecommendation?.task || null;
+  const freeTimeSlots = smartFreeTimeResult.slots || [];
+  const firstFreeSlot = freeTimeSlots[0] || null;
+  const firstSlotRecommendation =
+    smartFreeTimeResult.recommendations?.[0]?.best || null;
+  const suggestedTask = firstSlotRecommendation?.task || null;
+  const totalFreeMinutes = freeTimeSlots.reduce(
+    (sum, slot) => sum + Number(slot?.duration_minutes || 0),
+    0
+  );
 
   const handleDoneTask = async (taskId) => {
     try {
@@ -535,6 +557,11 @@ export default function HomeScreen() {
         style={styles.content}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
+        bounces={false}
+        alwaysBounceVertical={false}
+        overScrollMode="never"
+        scrollEventThrottle={16}
+        removeClippedSubviews={false}
       >
         <View style={styles.header}>
           <View style={styles.headerTextBox}>
@@ -698,18 +725,33 @@ export default function HomeScreen() {
             <View style={styles.sectionIconYellow}>
               <Ionicons name="bulb-outline" size={20} color="#D97706" />
             </View>
-            <Text style={styles.sectionTitle}>{t("todaysFreeTime")}</Text>
+            <Text style={styles.sectionTitle}>
+              {language === "th" ? "เวลาว่างวันนี้" : "Today's free time"}
+            </Text>
           </View>
         </View>
 
         <View style={styles.freeTimeCard}>
-          <View style={styles.freeTimeIllustration}>
-            <Ionicons name="alarm-outline" size={46} color={COLORS.primary} />
-          </View>
-
           <View style={styles.freeTimeInfo}>
             {firstFreeSlot ? (
               <>
+                <View style={styles.freeTimeLine}>
+                  <Ionicons
+                    name="hourglass-outline"
+                    size={17}
+                    color="#D97706"
+                  />
+                  <Text style={styles.freeTimeText}>
+                    {language === "th"
+                      ? "เวลาว่างรวมวันนี้"
+                      : "Total free time today"}
+                    :{" "}
+                    <Text style={styles.freeTimeHighlight}>
+                      {formatLocalizedDuration(totalFreeMinutes)}
+                    </Text>
+                  </Text>
+                </View>
+
                 <View style={styles.freeTimeLine}>
                   <Ionicons
                     name="time-outline"
@@ -717,7 +759,7 @@ export default function HomeScreen() {
                     color={COLORS.textMuted}
                   />
                   <Text style={styles.freeTimeText}>
-                    {t("available")}:{" "}
+                    {language === "th" ? "ช่วงเวลาว่าง" : "Free time slot"}: {" "}
                     <Text style={styles.freeTimeHighlight}>
                       {formatTime(firstFreeSlot.start_time)} -{" "}
                       {formatTime(firstFreeSlot.end_time)}
@@ -726,57 +768,38 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.freeTimeLine}>
-                  <Ionicons name="hourglass-outline" size={17} color="#D97706" />
-                  <Text style={styles.freeTimeText}>
-                    {t("duration")}:{" "}
-                    <Text style={styles.freeTimeHighlight}>
-                      {formatDuration(firstFreeSlot.duration_minutes)}
-                    </Text>
-                  </Text>
-                </View>
-
-                <View style={styles.freeTimeLine}>
-                  <Ionicons name="star-outline" size={17} color="#D97706" />
-                  <Text style={styles.freeTimeText}>
-                    {t("suggestedTask")}:{" "}
-                    <Text style={styles.freeTimeTask}>
-                      {suggestedTask?.title || t("noSuitableTask")}
-                    </Text>
-                  </Text>
-                </View>
-                {/*
-                {bestRecommendation ? (
-                  <View style={styles.freeTimeLine}>
-                    <Ionicons
-                      name="analytics-outline"
-                      size={17}
-                      color={COLORS.textMuted}
-                    />
-                    <Text style={styles.freeTimeReason}>
-                      {t("fitScore")}: {Math.round(bestRecommendation.score)}
-                    </Text>
-                  </View>
-                ) : null}
-
-                <View style={styles.freeTimeLine}>
                   <Ionicons
-                    name="locate-outline"
+                    name={suggestedTask
+                      ? "star-outline"
+                      : "information-circle-outline"}
                     size={17}
-                    color={COLORS.textMuted}
+                    color="#D97706"
                   />
-                  <Text style={styles.freeTimeReason}>
-                    {t("reason")}:{" "}
-                    {bestRecommendation
-                      ? formatRecommendationReasons(bestRecommendation)
-                      : language === "th"
-                        ? "เลือกงานที่เหมาะกับช่วงเวลาว่างนี้"
-                        : "choose a task that fits this free slot"}
+                  <Text style={styles.freeTimeText}>
+                    {suggestedTask ? (
+                      <>
+                        {language === "th"
+                          ? "กิจกรรมที่แนะนำ"
+                          : "Suggested task"}
+                        :{" "}
+                        <Text style={styles.freeTimeTask}>
+                          {suggestedTask.title}
+                        </Text>
+                      </>
+                    ) : language === "th" ? (
+                      "กิจกรรมที่แนะนำ: ยังไม่มีกิจกรรมที่พอดีกับช่วงเวลานี้"
+                    ) : (
+                      "Suggested task: No task fits this time slot"
+                    )}
                   </Text>
                 </View>
-                */}
               </>
             ) : (
-              <Text style={styles.emptyText}>{t("noAvailableFreeTime")}</Text>
+              <Text style={styles.freeTimeEmptyMessage}>
+                {language === "th"
+                  ? "ไม่มีช่วงเวลาว่างอย่างน้อย 15 นาทีจากเวลาปัจจุบันถึง 23:59"
+                  : "No free slot of at least 15 minutes from now until 23:59"}
+              </Text>
             )}
           </View>
         </View>
@@ -1137,19 +1160,8 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     borderColor: "#FDE68A",
-    padding: 16,
+    padding: 18,
     marginBottom: 22,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-  },
-  freeTimeIllustration: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: "#FEF3C7",
-    alignItems: "center",
-    justifyContent: "center",
   },
   freeTimeInfo: {
     flex: 1,
@@ -1157,12 +1169,13 @@ const styles = StyleSheet.create({
   },
   freeTimeLine: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 8,
-    flexWrap: "wrap",
   },
   freeTimeText: {
+    flex: 1,
     fontSize: 14,
+    lineHeight: 20,
     color: COLORS.textSecondary,
     fontWeight: "600",
   },
@@ -1173,6 +1186,19 @@ const styles = StyleSheet.create({
   freeTimeTask: {
     color: COLORS.text,
     fontWeight: "900",
+  },
+  freeTimeSummary: {
+    flex: 1,
+    fontSize: 13,
+    color: COLORS.textMuted,
+    fontWeight: "700",
+  },
+  freeTimeEmptyMessage: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: COLORS.textMuted,
+    fontWeight: "700",
   },
   freeTimeReason: {
     flex: 1,
